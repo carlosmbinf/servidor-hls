@@ -5,7 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "NODE_ENV=development node src/index.js",
+    "dev": "NODE_ENV=development npx nodemon src/index.js",
     "check": "node --check src/index.js && node --check src/routes.js && node --check src/hlsService.js && node --check src/meteorClient.js && node --check src/movieService.js"
   },
   "author": "",
