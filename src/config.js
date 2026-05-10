@@ -12,7 +12,7 @@ const config = {
   hlsIdleTimeoutMs: Number(process.env.HLS_IDLE_TIMEOUT_MS || 45000),
   hlsKillGraceMs: Number(process.env.HLS_KILL_GRACE_MS || 5000),
   meteorDdpEndpoint: process.env.METEOR_DDP_ENDPOINT || 'ws://localhost:3000/websocket',
-  port: Number(process.env.PORT || 3010),
+  port: Number(process.env.PORT || 3050),
 };
 
 module.exports = config;
