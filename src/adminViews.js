@@ -147,7 +147,7 @@ function renderAdminDashboardPage({ user }) {
       if (!jobs.length) return '<div class="empty">No hay conversiones FFmpeg activas ahora.</div>';
       return jobs.map((job) => {
         const percent = Number.isFinite(job.progress?.percent) ? Math.round(job.progress.percent * 10) / 10 : null;
-        const output = Array.isArray(job.recentOutput) ? job.recentOutput.slice(-18).join('\n') : '';
+        const output = Array.isArray(job.recentOutput) ? job.recentOutput.slice(-18).join('\\n') : '';
         return '<article class="job">' +
           '<div class="job-head"><div><div class="job-title">' + safeText(job.movieTitle || job.cacheKey) + '</div><div class="job-meta">Sesion ' + safeText(job.sessionId) + ' · PID ' + safeText(job.pid || '-') + ' · ' + formatMs(job.uptimeMs) + '</div></div><span class="pill ok">FFmpeg</span></div>' +
           '<div class="bar-track"><div class="bar-fill" style="width:' + (percent ?? 0) + '%"></div></div>' +
