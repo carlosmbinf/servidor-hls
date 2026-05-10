@@ -88,8 +88,17 @@ function renderAdminDashboardPage({ user }) {
     .list { display: grid; gap: 12px; }
     .job { border: 1px solid rgba(148,163,184,.16); border-radius: 16px; background: var(--panel-2); padding: 14px; }
     .job-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+    .job-toggle { appearance: none; width: 100%; border: 0; padding: 0; margin: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+    .job-toggle:focus-visible { outline: 2px solid rgba(56,189,248,.75); outline-offset: 4px; border-radius: 12px; }
+    .job-actions { display: flex; align-items: center; gap: 8px; }
+    .job-hint { color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+    .chevron { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid rgba(148,163,184,.2); border-radius: 999px; color: #dbeafe; background: rgba(2,6,23,.24); transition: transform .2s ease, background .2s ease; }
+    .job.open .chevron { transform: rotate(180deg); background: rgba(56,189,248,.16); }
     .job-title { font-weight: 900; }
     .job-meta { color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+    .job-summary { margin-top: 12px; }
+    .job-details { display: none; margin-top: 12px; }
+    .job.open .job-details { display: block; }
     .pill { border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 900; white-space: nowrap; }
     .pill.ok { background: rgba(34,197,94,.16); color: #bbf7d0; }
     .pill.warn { background: rgba(245,158,11,.16); color: #fde68a; }
@@ -132,6 +141,8 @@ function renderAdminDashboardPage({ user }) {
   </main>
   <script>
     const $ = (id) => document.getElementById(id);
+    const expandedFfmpegJobs = new Set();
+    const expandedDirectStreams = new Set();
     const formatMs = (ms) => {
       const seconds = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
       const h = Math.floor(seconds / 3600);
@@ -146,19 +157,32 @@ function renderAdminDashboardPage({ user }) {
     function renderFfmpegJobs(jobs) {
       if (!jobs.length) return '<div class="empty">No hay conversiones FFmpeg activas ahora.</div>';
       return jobs.map((job) => {
+        const jobKey = safeText(job.runtimeId || job.sessionId || job.cacheKey || job.pid || 'ffmpeg');
+        const isOpen = expandedFfmpegJobs.has(jobKey);
         const percent = Number.isFinite(job.progress?.percent) ? Math.round(job.progress.percent * 10) / 10 : null;
         const output = Array.isArray(job.recentOutput) ? job.recentOutput.slice(-18).join('\\n') : '';
-        return '<article class="job">' +
-          '<div class="job-head"><div><div class="job-title">' + safeText(job.movieTitle || job.cacheKey) + '</div><div class="job-meta">Sesion ' + safeText(job.sessionId) + ' · PID ' + safeText(job.pid || '-') + ' · ' + formatMs(job.uptimeMs) + '</div></div><span class="pill ok">FFmpeg</span></div>' +
-          '<div class="bar-track"><div class="bar-fill" style="width:' + (percent ?? 0) + '%"></div></div>' +
-          '<div class="kv"><div><span>Progreso</span><strong>' + (percent == null ? '-' : percent + '%') + '</strong></div><div><span>Velocidad</span><strong>' + safeText(job.progress?.speed || '-') + '</strong></div><div><span>FPS</span><strong>' + safeText(job.progress?.fps || '-') + '</strong></div><div><span>Segmentos</span><strong>' + safeText(job.segmentsCount ?? 0) + '</strong></div></div>' +
-          (output ? '<pre>' + safeText(output) + '</pre>' : '') +
+        return '<article class="job ' + (isOpen ? 'open' : '') + '">' +
+          '<button class="job-toggle" type="button" data-kind="ffmpeg" data-key="' + jobKey + '" aria-expanded="' + (isOpen ? 'true' : 'false') + '">' +
+            '<div class="job-head"><div><div class="job-title">' + safeText(job.movieTitle || job.cacheKey) + '</div><div class="job-meta">Sesion ' + safeText(job.sessionId) + ' · PID ' + safeText(job.pid || '-') + ' · ' + formatMs(job.uptimeMs) + '</div></div><div class="job-actions"><span class="job-hint">' + (isOpen ? 'Ocultar' : 'Ver detalle') + '</span><span class="pill ok">FFmpeg</span><span class="chevron">⌄</span></div></div>' +
+            '<div class="bar-track"><div class="bar-fill" style="width:' + (percent ?? 0) + '%"></div></div>' +
+          '</button>' +
+          '<div class="job-summary"><div class="kv"><div><span>Progreso</span><strong>' + (percent == null ? '-' : percent + '%') + '</strong></div><div><span>Velocidad</span><strong>' + safeText(job.progress?.speed || '-') + '</strong></div><div><span>FPS</span><strong>' + safeText(job.progress?.fps || '-') + '</strong></div><div><span>Segmentos</span><strong>' + safeText(job.segmentsCount ?? 0) + '</strong></div></div></div>' +
+          '<div class="job-details">' + (output ? '<pre>' + safeText(output) + '</pre>' : '<div class="empty">Sin salida reciente de FFmpeg.</div>') + '</div>' +
           '</article>';
       }).join('');
     }
     function renderDirectStreams(streams) {
       if (!streams.length) return '<div class="empty">No hay streams directos activos.</div>';
-      return streams.map((stream) => '<article class="job"><div class="job-head"><div><div class="job-title">' + safeText(stream.movieTitle || stream.idPeli) + '</div><div class="job-meta">' + safeText(stream.range || 'sin rango') + ' · ' + formatMs(stream.uptimeMs) + '</div></div><span class="pill warn">Directo</span></div><div class="job-meta">' + safeText(shortUrl(stream.videoUrl)) + '</div></article>').join('');
+      return streams.map((stream) => {
+        const streamKey = safeText(stream.id || stream.streamId || stream.idPeli || 'direct');
+        const isOpen = expandedDirectStreams.has(streamKey);
+        return '<article class="job ' + (isOpen ? 'open' : '') + '">' +
+          '<button class="job-toggle" type="button" data-kind="direct" data-key="' + streamKey + '" aria-expanded="' + (isOpen ? 'true' : 'false') + '">' +
+            '<div class="job-head"><div><div class="job-title">' + safeText(stream.movieTitle || stream.idPeli) + '</div><div class="job-meta">' + safeText(stream.range || 'sin rango') + ' · ' + formatMs(stream.uptimeMs) + '</div></div><div class="job-actions"><span class="job-hint">' + (isOpen ? 'Ocultar' : 'Ver detalle') + '</span><span class="pill warn">Directo</span><span class="chevron">⌄</span></div></div>' +
+          '</button>' +
+          '<div class="job-details"><div class="job-meta">' + safeText(shortUrl(stream.videoUrl)) + '</div></div>' +
+          '</article>';
+      }).join('');
     }
     async function refreshRuntime() {
       try {
@@ -181,6 +205,14 @@ function renderAdminDashboardPage({ user }) {
         $('last-refresh').textContent = new Date().toLocaleTimeString();
       }
     }
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('.job-toggle');
+      if (!button) return;
+      const key = button.dataset.key;
+      const store = button.dataset.kind === 'direct' ? expandedDirectStreams : expandedFfmpegJobs;
+      if (store.has(key)) store.delete(key); else store.add(key);
+      refreshRuntime();
+    });
     refreshRuntime();
     setInterval(refreshRuntime, 2000);
   </script>
