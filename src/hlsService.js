@@ -8,6 +8,7 @@ const config = require('./config');
 const HLS_PLAYLIST_NAME = 'index.m3u8';
 const movieHlsJobs = new Map();
 const movieHlsMetadataPromises = new Map();
+const activeDirectStreams = new Map();
 
 function getFfmpegPath() {
   return config.ffmpegPath || ffmpegStaticPath || 'ffmpeg';
@@ -27,6 +28,10 @@ function sanitizeCacheName(value = '') {
 
 function createMovieHlsSessionId() {
   return crypto.randomBytes(12).toString('hex');
+}
+
+function createRuntimeId() {
+  return crypto.randomBytes(8).toString('hex');
 }
 
 function normalizeMovieHlsSessionId(value = '') {
@@ -149,6 +154,91 @@ function countHlsSegments(dir) {
   } catch (_error) {
     return 0;
   }
+}
+
+function appendRecentLine(lines, value, maxLines = 80) {
+  const normalizedValue = String(value || '').trim();
+  if (!normalizedValue) return lines;
+  const nextLines = lines.concat(normalizedValue.split('\n').map((line) => line.trim()).filter(Boolean));
+  return nextLines.slice(-maxLines);
+}
+
+function parseFfmpegProgressLine(job, line = '') {
+  const separatorIndex = line.indexOf('=');
+  if (separatorIndex <= 0) return;
+
+  const key = line.slice(0, separatorIndex).trim();
+  const value = line.slice(separatorIndex + 1).trim();
+  if (!key) return;
+
+  job.progress = {
+    ...(job.progress || {}),
+    [key]: value,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function getProgressSeconds(progress = {}) {
+  const outTimeMs = Number(progress.out_time_ms);
+  if (Number.isFinite(outTimeMs) && outTimeMs > 0) return outTimeMs / 1000000;
+
+  const outTimeUs = Number(progress.out_time_us);
+  if (Number.isFinite(outTimeUs) && outTimeUs > 0) return outTimeUs / 1000000;
+
+  const timeMatch = String(progress.out_time || '').match(/^(\d+):(\d+):(\d+(?:\.\d+)?)$/);
+  if (!timeMatch) return null;
+  return (Number(timeMatch[1]) * 3600) + (Number(timeMatch[2]) * 60) + Number(timeMatch[3]);
+}
+
+function getJobProgressSummary(job) {
+  const progress = job.progress || {};
+  const relativeSeconds = getProgressSeconds(progress);
+  const absoluteSeconds = Number.isFinite(relativeSeconds) ? (Number(job.startAtSeconds || 0) + relativeSeconds) : null;
+  const durationSeconds = Number(job.durationSeconds || 0) || null;
+  const percent = durationSeconds && Number.isFinite(absoluteSeconds)
+    ? Math.max(0, Math.min(100, (absoluteSeconds / durationSeconds) * 100))
+    : null;
+
+  return {
+    bitrate: progress.bitrate || null,
+    fps: progress.fps || null,
+    frame: progress.frame || null,
+    progress: progress.progress || null,
+    relativeSeconds,
+    absoluteSeconds,
+    percent,
+    speed: progress.speed || null,
+    totalSize: progress.total_size || null,
+    updatedAt: progress.updatedAt || null,
+  };
+}
+
+function registerDirectStream({ idPeli, movieTitle, videoUrl, range, ip, userAgent }) {
+  const streamId = createRuntimeId();
+  activeDirectStreams.set(streamId, {
+    id: streamId,
+    idPeli,
+    movieTitle: movieTitle || idPeli,
+    videoUrl,
+    range: range || null,
+    ip: ip || null,
+    userAgent: userAgent || null,
+    startedAt: new Date().toISOString(),
+    startedAtMs: Date.now(),
+  });
+  return streamId;
+}
+
+function unregisterDirectStream(streamId) {
+  if (!streamId) return;
+  activeDirectStreams.delete(streamId);
+}
+
+function getDirectStreamsSnapshot() {
+  return Array.from(activeDirectStreams.values()).map((stream) => ({
+    ...stream,
+    uptimeMs: Date.now() - stream.startedAtMs,
+  }));
 }
 
 function cleanupMovieHlsSession(context) {
@@ -300,6 +390,7 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
     '-nostdin',
     '-hide_banner',
     '-loglevel', 'warning',
+    '-progress', 'pipe:2',
     '-fflags', '+genpts',
     '-reconnect', '1',
     '-reconnect_streamed', '1',
@@ -342,7 +433,13 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
     lastAccessAt: Date.now(),
     startAtSeconds,
     durationSeconds,
+    dir: context.dir,
+    movieTitle: movieTitle || context.cacheKey,
+    playlistUrl: context.playlistUrl,
+    sessionId: context.sessionId,
     stderr: '',
+    recentOutput: [],
+    progress: {},
     cleanupOnStop: false,
     idleTimer: null,
     killTimer: null,
@@ -353,7 +450,10 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
   console.log(`Preparando HLS: ${movieTitle || context.cacheKey} desde ${startAtSeconds}s`);
 
   ffmpeg.stderr.on('data', (chunk) => {
-    job.stderr = `${job.stderr}${chunk.toString()}`.slice(-8000);
+    const chunkText = chunk.toString();
+    job.stderr = `${job.stderr}${chunkText}`.slice(-8000);
+    job.recentOutput = appendRecentLine(job.recentOutput, chunkText);
+    chunkText.split('\n').forEach((line) => parseFfmpegProgressLine(job, line.trim()));
   });
 
   ffmpeg.on('error', (error) => {
@@ -391,6 +491,37 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
   return getMovieHlsStatus(context);
 }
 
+function getHlsRuntimeSnapshot() {
+  const activeJobs = Array.from(movieHlsJobs.entries()).map(([cacheKey, job]) => ({
+    cacheKey,
+    durationSeconds: Number(job.durationSeconds || 0) || null,
+    movieTitle: job.movieTitle,
+    pid: job.process?.pid || null,
+    playlistUrl: job.playlistUrl,
+    progress: getJobProgressSummary(job),
+    recentOutput: job.recentOutput || [],
+    segmentsCount: countHlsSegments(job.dir),
+    sessionId: job.sessionId,
+    startAtSeconds: Number(job.startAtSeconds || 0),
+    startedAt: job.startedAt,
+    stoppedReason: job.stoppedReason || null,
+    uptimeMs: Date.now() - (job.startedAtMs || Date.now()),
+  }));
+
+  return {
+    activeDirectStreams: getDirectStreamsSnapshot(),
+    activeFfmpegJobs: activeJobs,
+    cacheDir: config.cacheDir,
+    ffmpegPath: getFfmpegPath(),
+    now: new Date().toISOString(),
+    totals: {
+      activeDirectStreams: activeDirectStreams.size,
+      activeFfmpegJobs: movieHlsJobs.size,
+      activeStreams: activeDirectStreams.size + movieHlsJobs.size,
+    },
+  };
+}
+
 function serveHlsFile(req, res, filePath, contentType, cacheControl) {
   if (!fs.existsSync(filePath)) return res.status(404).send('Segmento no disponible');
 
@@ -417,10 +548,13 @@ module.exports = {
   getRequestedMovieHlsSessionId,
   normalizeMovieHlsStartAt,
   probeMovieHlsMetadata,
+  registerDirectStream,
   sendJson,
   serveHlsFile,
   startMovieHlsConversion,
   stopMovieHlsJob,
   touchMovieHlsJob,
   cleanupMovieHlsSession,
+  getHlsRuntimeSnapshot,
+  unregisterDirectStream,
 };

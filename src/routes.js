@@ -7,16 +7,29 @@ const {
   createMovieHlsSessionId,
   getMovieHlsContext,
   getMovieHlsStatus,
+  getHlsRuntimeSnapshot,
   getRequestedMovieHlsSessionId,
   normalizeMovieHlsStartAt,
   probeMovieHlsMetadata,
+  registerDirectStream,
   sendJson,
   serveHlsFile,
   startMovieHlsConversion,
   stopMovieHlsJob,
   touchMovieHlsJob,
+  unregisterDirectStream,
 } = require('./hlsService');
 const { getMovie, getMovieVideoForStreaming, getVideoContentType, normalizeSubtitleToVtt } = require('./movieService');
+const {
+  authenticateAdmin,
+  clearSessionCookie,
+  createAdminSession,
+  destroyAdminSession,
+  requireAdminApi,
+  requireAdminPage,
+  setSessionCookie,
+} = require('./auth');
+const { renderAdminDashboardPage, renderAdminLoginPage } = require('./adminViews');
 
 const router = express.Router();
 const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
@@ -298,9 +311,45 @@ router.get('/', (_req, res) => {
   res.send(renderStreamingLandingPage());
 });
 
+router.get('/admin/login', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(renderAdminLoginPage({ error: req.query?.error || '' }));
+});
+
+router.post('/admin/login', async (req, res) => {
+  try {
+    const user = await authenticateAdmin(req.body?.identifier, req.body?.password);
+    const token = createAdminSession(user);
+    setSessionCookie(req, res, token);
+    res.redirect('/admin');
+  } catch (error) {
+    const message = encodeURIComponent(error?.message || 'No se pudo iniciar sesion');
+    res.redirect(`/admin/login?error=${message}`);
+  }
+});
+
+router.post('/admin/logout', (req, res) => {
+  destroyAdminSession(req);
+  clearSessionCookie(res);
+  res.redirect('/admin/login');
+});
+
+router.get('/admin', requireAdminPage, (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(renderAdminDashboardPage({ user: req.adminSession.user }));
+});
+
+router.get('/admin/api/runtime', requireAdminApi, (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ success: true, ...getHlsRuntimeSnapshot() });
+});
+
 router.get('/peliculas/stream/:idPeli', async (req, res) => {
   const idPeli = req.params?.idPeli || req.query?.idPeli || req.query?.id;
   let upstreamStream = null;
+  let directStreamId = null;
   let streamClosed = false;
 
   if (!idPeli) return res.status(400).send('Debe enviar el id de la pelicula');
@@ -313,6 +362,7 @@ router.get('/peliculas/stream/:idPeli', async (req, res) => {
     const closeUpstream = () => {
       if (streamClosed) return;
       streamClosed = true;
+      unregisterDirectStream(directStreamId);
       if (upstreamStream?.destroy) upstreamStream.destroy();
     };
 
@@ -331,7 +381,16 @@ router.get('/peliculas/stream/:idPeli', async (req, res) => {
     });
 
     upstreamStream = upstreamResponse.data;
+    directStreamId = registerDirectStream({
+      idPeli,
+      movieTitle: pelicula?.nombrePeli,
+      videoUrl,
+      range: req.headers.range || null,
+      ip: req.ip || req.socket?.remoteAddress || null,
+      userAgent: req.headers['user-agent'] || null,
+    });
     if (streamClosed) {
+      unregisterDirectStream(directStreamId);
       upstreamStream.destroy();
       return undefined;
     }
@@ -345,8 +404,10 @@ router.get('/peliculas/stream/:idPeli', async (req, res) => {
 
     upstreamStream.on('end', () => {
       streamClosed = true;
+      unregisterDirectStream(directStreamId);
     });
     upstreamStream.on('error', (error) => {
+      unregisterDirectStream(directStreamId);
       console.error('Error al transmitir pelicula:', pelicula?.nombrePeli || idPeli, error?.message || error);
       if (!res.headersSent) res.status(502);
       res.end();
