@@ -104,6 +104,8 @@ async function probeMovieHlsMetadata(context, videoUrl) {
     fs.mkdirSync(context.movieDir, { recursive: true });
     const args = [
       '-hide_banner',
+      '-analyzeduration', '100M',
+      '-probesize', '100M',
       '-reconnect', '1',
       '-reconnect_streamed', '1',
       '-reconnect_delay_max', '5',
@@ -112,6 +114,7 @@ async function probeMovieHlsMetadata(context, videoUrl) {
     ];
     const probe = spawn(getFfmpegPath(), args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
+    let detectedDurationSeconds = null;
     const timeout = setTimeout(() => {
       try {
         if (!probe.killed) probe.kill('SIGKILL');
@@ -121,7 +124,12 @@ async function probeMovieHlsMetadata(context, videoUrl) {
     }, 15000);
 
     probe.stderr.on('data', (chunk) => {
-      stderr = `${stderr}${chunk.toString()}`.slice(-12000);
+      const chunkText = chunk.toString();
+      const nextStderr = `${stderr}${chunkText}`;
+      if (!detectedDurationSeconds) {
+        detectedDurationSeconds = parseFfmpegDuration(nextStderr);
+      }
+      stderr = nextStderr.slice(-48000);
     });
 
     probe.on('error', () => {
@@ -131,7 +139,7 @@ async function probeMovieHlsMetadata(context, videoUrl) {
 
     probe.on('close', () => {
       clearTimeout(timeout);
-      const durationSeconds = parseFfmpegDuration(stderr);
+      const durationSeconds = detectedDurationSeconds || parseFfmpegDuration(stderr);
       try {
         fs.writeFileSync(context.metadataPath, JSON.stringify({ durationSeconds, probedAt: new Date().toISOString(), videoUrl }, null, 2));
       } catch (_error) {
