@@ -341,10 +341,13 @@ router.get('/admin', requireAdminPage, (req, res) => {
   res.send(renderAdminDashboardPage({ user: req.adminSession.user }));
 });
 
-router.get('/admin/api/runtime', requireAdminApi, (_req, res) => {
+const sendRuntimeSnapshot = (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.json({ success: true, ...getHlsRuntimeSnapshot() });
-});
+};
+
+router.get('/api/runtime', sendRuntimeSnapshot);
+router.get('/admin/api/runtime', sendRuntimeSnapshot);
 
 router.get('/peliculas/stream/:idPeli', async (req, res) => {
   const idPeli = req.params?.idPeli || req.query?.idPeli || req.query?.id;

@@ -186,7 +186,7 @@ function renderAdminDashboardPage({ user }) {
     }
     async function refreshRuntime() {
       try {
-        const response = await fetch('/admin/api/runtime', { credentials: 'same-origin' });
+        const response = await fetch('/api/runtime', { credentials: 'same-origin' });
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const data = await response.json();
         const ffmpegJobs = data.activeFfmpegJobs || [];
