@@ -55,6 +55,21 @@ function normalizeCourseSourceUrl(value) {
   }
 }
 
+async function assertCourseSourceAvailable(sourceUrl) {
+  const response = await axios.get(sourceUrl, {
+    headers: { Range: 'bytes=0-0', 'User-Agent': 'VIDKAR-HLS-Source-Check/1.0' },
+    responseType: 'stream',
+    timeout: 10000,
+    validateStatus: () => true,
+  });
+  response.data?.destroy?.();
+  if (response.status !== 200 && response.status !== 206) {
+    const error = new Error(`El origen del curso respondió HTTP ${response.status}`);
+    error.statusCode = response.status;
+    throw error;
+  }
+}
+
 function getStoredCourseHlsContext(lessonId, sessionId) {
   return courseHlsContexts.get(getCourseHlsContextKey(lessonId, sessionId)) || null;
 }
@@ -594,6 +609,7 @@ router.post('/cursos/hls/:lessonId/prepare', async (req, res) => {
   }
 
   try {
+    await assertCourseSourceAvailable(sourceUrl);
     const context = getCourseHlsContext(lessonId, sourceUrl, sessionId);
     courseHlsContexts.set(getCourseHlsContextKey(lessonId, sessionId), context);
     const metadata = await probeMovieHlsMetadata(context, sourceUrl);
@@ -607,7 +623,13 @@ router.post('/cursos/hls/:lessonId/prepare', async (req, res) => {
     return sendJson(res, 200, { success: true, ...status });
   } catch (error) {
     console.error('No se pudo preparar HLS de curso:', error?.message || error);
-    return sendJson(res, 500, { success: false, error: 'No se pudo preparar la conversión del curso' });
+    const sourceUnavailable = Number.isInteger(error?.statusCode);
+    return sendJson(res, sourceUnavailable ? 502 : 500, {
+      success: false,
+      error: sourceUnavailable
+        ? 'El archivo original del curso no está disponible en el servidor'
+        : 'No se pudo preparar la conversión del curso',
+    });
   }
 });
 

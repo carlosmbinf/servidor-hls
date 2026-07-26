@@ -24,7 +24,7 @@ Con eso obtiene `urlPeliHTTPS`, `urlPeli`, `extension`, `nombrePeli` y `textSubt
 
 ```bash
 PORT=3010
-METEOR_DDP_ENDPOINT=ws://www.vidkar.com:3000/websocket
+METEOR_DDP_ENDPOINT=ws://38sljhvg-3000.brs.devtunnels.ms/websocket
 HLS_CACHE_DIR=./.vidkar-cache/peliculas-hls
 HLS_IDLE_TIMEOUT_MS=45000
 FFMPEG_PATH=/usr/bin/ffmpeg # opcional; si no, usa ffmpeg-static
