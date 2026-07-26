@@ -2,9 +2,11 @@ const axios = require('axios');
 const express = require('express');
 const https = require('https');
 const path = require('path');
+const config = require('./config');
 const {
   cleanupMovieHlsSession,
   createMovieHlsSessionId,
+  getCourseHlsContext,
   getMovieHlsContext,
   getMovieHlsStatus,
   getHlsRuntimeSnapshot,
@@ -33,6 +35,29 @@ const { renderAdminDashboardPage, renderAdminLoginPage } = require('./adminViews
 
 const router = express.Router();
 const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
+const courseHlsContexts = new Map();
+
+function getCourseHlsContextKey(lessonId, sessionId) {
+  return `${lessonId}:${sessionId}`;
+}
+
+function normalizeCourseSourceUrl(value) {
+  try {
+    const sourceUrl = new URL(String(value || ''));
+    const expectedOrigin = new URL(config.meteorHttpOrigin);
+    const isCourseMediaPath = /^\/cursos\/media\/stream\/[^/]+$/.test(sourceUrl.pathname);
+    if (sourceUrl.origin !== expectedOrigin.origin || !isCourseMediaPath || !sourceUrl.searchParams.get('token')) {
+      return null;
+    }
+    return sourceUrl.toString();
+  } catch (_error) {
+    return null;
+  }
+}
+
+function getStoredCourseHlsContext(lessonId, sessionId) {
+  return courseHlsContexts.get(getCourseHlsContextKey(lessonId, sessionId)) || null;
+}
 
 function renderStreamingLandingPage() {
   const currentYear = new Date().getFullYear();
@@ -556,6 +581,85 @@ router.get('/getsubtitle', async (req, res) => {
     console.error('No se pudo obtener subtitulo:', error?.message || error);
     return res.status(500).send('');
   }
+});
+
+router.post('/cursos/hls/:lessonId/prepare', async (req, res) => {
+  const lessonId = String(req.params?.lessonId || '').trim();
+  const sessionId = getRequestedMovieHlsSessionId(req) || createMovieHlsSessionId();
+  const sourceUrl = normalizeCourseSourceUrl(req.body?.sourceUrl || req.query?.sourceUrl);
+  const startAtSeconds = normalizeMovieHlsStartAt(req.body?.startAt ?? req.query?.startAt);
+
+  if (!lessonId || !sourceUrl) {
+    return sendJson(res, 400, { success: false, error: 'Debe enviar una fuente de curso válida' });
+  }
+
+  try {
+    const context = getCourseHlsContext(lessonId, sourceUrl, sessionId);
+    courseHlsContexts.set(getCourseHlsContextKey(lessonId, sessionId), context);
+    const metadata = await probeMovieHlsMetadata(context, sourceUrl);
+    const status = startMovieHlsConversion({
+      context,
+      durationSeconds: metadata.durationSeconds,
+      startAtSeconds,
+      videoUrl: sourceUrl,
+      movieTitle: `Lección ${lessonId}`,
+    });
+    return sendJson(res, 200, { success: true, ...status });
+  } catch (error) {
+    console.error('No se pudo preparar HLS de curso:', error?.message || error);
+    return sendJson(res, 500, { success: false, error: 'No se pudo preparar la conversión del curso' });
+  }
+});
+
+router.get('/cursos/hls/:lessonId/status', (req, res) => {
+  const lessonId = String(req.params?.lessonId || '').trim();
+  const sessionId = getRequestedMovieHlsSessionId(req);
+  const context = sessionId ? getStoredCourseHlsContext(lessonId, sessionId) : null;
+
+  if (!lessonId || !sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar la sesión del curso' });
+  if (!context) return sendJson(res, 404, { success: false, error: 'La sesión HLS del curso no existe' });
+
+  touchMovieHlsJob(context);
+  return sendJson(res, 200, { success: true, ...getMovieHlsStatus(context) });
+});
+
+router.post('/cursos/hls/:lessonId/:sessionId/cancel', (req, res) => {
+  const lessonId = String(req.params?.lessonId || '').trim();
+  const sessionId = getRequestedMovieHlsSessionId(req);
+  const context = sessionId ? getStoredCourseHlsContext(lessonId, sessionId) : null;
+
+  if (!lessonId || !sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar la sesión del curso' });
+  if (!context) return sendJson(res, 404, { success: false, error: 'La sesión HLS del curso no existe' });
+
+  const stopped = stopMovieHlsJob(context, 'client-cancel', true);
+  if (!stopped) cleanupMovieHlsSession(context);
+  courseHlsContexts.delete(getCourseHlsContextKey(lessonId, sessionId));
+  return sendJson(res, 200, { success: true, sessionId, stopped });
+});
+
+router.get('/cursos/hls/:lessonId/:sessionId/index.m3u8', (req, res) => {
+  const lessonId = String(req.params?.lessonId || '').trim();
+  const sessionId = getRequestedMovieHlsSessionId(req);
+  const context = sessionId ? getStoredCourseHlsContext(lessonId, sessionId) : null;
+
+  if (!lessonId || !sessionId || !context) return res.status(404).send('Playlist de curso no disponible');
+  touchMovieHlsJob(context);
+  const status = getMovieHlsStatus(context);
+  if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
+  return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
+});
+
+router.get('/cursos/hls/:lessonId/:sessionId/:segmentName', (req, res) => {
+  const lessonId = String(req.params?.lessonId || '').trim();
+  const sessionId = getRequestedMovieHlsSessionId(req);
+  const segmentName = req.params?.segmentName;
+  const context = sessionId ? getStoredCourseHlsContext(lessonId, sessionId) : null;
+
+  if (!lessonId || !sessionId || !context || !/^segment_\d+\.ts$/.test(segmentName || '')) {
+    return res.status(404).send('Segmento de curso no encontrado');
+  }
+  touchMovieHlsJob(context);
+  return serveHlsFile(req, res, path.join(context.dir, segmentName), 'video/mp2t', 'no-store');
 });
 
 module.exports = router;

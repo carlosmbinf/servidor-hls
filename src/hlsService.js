@@ -18,8 +18,8 @@ function sendJson(res, statusCode, payload) {
   res.status(statusCode).type('application/json; charset=utf-8').send(JSON.stringify(payload));
 }
 
-function getMovieHlsBaseUrl(idPeli, sessionId) {
-  return `/peliculas/hls/${encodeURIComponent(idPeli)}/${encodeURIComponent(sessionId)}`;
+function getHlsBaseUrl(resourceId, sessionId, routePrefix) {
+  return `${routePrefix}/${encodeURIComponent(resourceId)}/${encodeURIComponent(sessionId)}`;
 }
 
 function sanitizeCacheName(value = '') {
@@ -49,12 +49,12 @@ function getRequestedMovieHlsSessionId(req) {
   return normalizeMovieHlsSessionId(req.params?.sessionId || req.query?.sessionId || req.headers?.['x-hls-session-id']);
 }
 
-function getMovieHlsContext(idPeli, videoUrl, sessionId = 'default') {
+function getMovieHlsContext(idPeli, videoUrl, sessionId = 'default', routePrefix = '/peliculas/hls', cacheRoot = config.cacheDir, cacheNamespace = 'movie') {
   const safeId = sanitizeCacheName(idPeli);
   const hash = crypto.createHash('sha1').update(`${idPeli}:${videoUrl}`).digest('hex').slice(0, 16);
   const movieCacheKey = `${safeId}-${hash}`;
-  const cacheKey = `${movieCacheKey}-${sessionId}`;
-  const movieDir = path.join(config.cacheDir, movieCacheKey);
+  const cacheKey = `${cacheNamespace}-${movieCacheKey}-${sessionId}`;
+  const movieDir = path.join(cacheRoot, movieCacheKey);
   const dir = path.join(movieDir, sessionId);
 
   return {
@@ -68,8 +68,12 @@ function getMovieHlsContext(idPeli, videoUrl, sessionId = 'default') {
     sessionInfoPath: path.join(dir, 'session.json'),
     metadataPath: path.join(movieDir, 'metadata.json'),
     sessionId,
-    playlistUrl: `${getMovieHlsBaseUrl(idPeli, sessionId)}/${HLS_PLAYLIST_NAME}`,
+    playlistUrl: `${getHlsBaseUrl(idPeli, sessionId, routePrefix)}/${HLS_PLAYLIST_NAME}`,
   };
+}
+
+function getCourseHlsContext(lessonId, videoUrl, sessionId = 'default') {
+  return getMovieHlsContext(lessonId, videoUrl, sessionId, '/cursos/hls', config.courseCacheDir, 'course');
 }
 
 function readJsonFile(filePath) {
@@ -551,6 +555,7 @@ function serveHlsFile(req, res, filePath, contentType, cacheControl) {
 
 module.exports = {
   createMovieHlsSessionId,
+  getCourseHlsContext,
   getMovieHlsContext,
   getMovieHlsStatus,
   getRequestedMovieHlsSessionId,
