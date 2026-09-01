@@ -6,9 +6,9 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 module.exports = {
   apps: [
     {
-      name: process.env.PM2_APP_NAME,
-      script: process.env.PM2_SCRIPT,
-      instances: process.env.PM2_INSTANCES,
+      name: process.env.PM2_APP_NAME || 'servidor-hls-vidkar',
+      script: process.env.PM2_SCRIPT || 'src/index.js',
+      instances: process.env.PM2_INSTANCES || 1,
       autorestart: process.env.PM2_AUTORESTART === 'true',
       watch: process.env.PM2_WATCH === 'true',
       max_memory_restart: process.env.PM2_MAX_MEMORY_RESTART,
