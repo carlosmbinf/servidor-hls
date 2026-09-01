@@ -22,13 +22,29 @@ Con eso obtiene `urlPeliHTTPS`, `urlPeli`, `extension`, `nombrePeli` y `textSubt
 
 ## Variables de entorno
 
+PM2 carga automáticamente las variables desde `.env` al ejecutar `pm2 start ecosystem.config.js`.
+Puedes copiar `.env.example` como `.env` y completar los valores:
+
 ```bash
+PM2_APP_NAME=servidor-hls-vidkar
+PM2_SCRIPT=src/index.js
+PM2_INSTANCES=1
+PM2_AUTORESTART=true
+PM2_WATCH=false
+PM2_MAX_MEMORY_RESTART=1200M
+NODE_ENV=production
 PORT=3010
 METEOR_DDP_ENDPOINT=ws://38sljhvg-3000.brs.devtunnels.ms/websocket
+METEOR_HTTP_ORIGIN=http://localhost:3000
 HLS_CACHE_DIR=./.vidkar-cache/peliculas-hls
+SERIES_HLS_CACHE_DIR=./.vidkar-cache/series-hls
 HLS_IDLE_TIMEOUT_MS=45000
+HLS_KILL_GRACE_MS=5000
 FFMPEG_PATH=/usr/bin/ffmpeg # opcional; si no, usa ffmpeg-static
 ALLOWED_ORIGINS=https://www.vidkar.com,http://localhost:3000 # opcional
+HLS_PLAYBACK_SECRET=change-this-secret
+ADMIN_SESSION_MAX_AGE_MS=28800000
+ADMIN_SESSION_SECRET=change-this-secret
 ```
 
 ## Arranque local
