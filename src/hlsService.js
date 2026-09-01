@@ -8,15 +8,14 @@ const config = require('./config');
 const HLS_PLAYLIST_NAME = 'index.m3u8';
 const hlsJobsByNamespace = new Map([
   ['movie', new Map()],
-  ['course', new Map()],
   ['series', new Map()],
 ]);
 const hlsMetadataPromisesByNamespace = new Map([
   ['movie', new Map()],
-  ['course', new Map()],
   ['series', new Map()],
 ]);
 const activeDirectStreams = new Map();
+const seriesHlsSessions = new Map();
 
 function getHlsNamespace(context) {
   return context?.namespace || 'movie';
@@ -73,6 +72,60 @@ function getRequestedMovieHlsSessionId(req) {
   return normalizeMovieHlsSessionId(req.params?.sessionId || req.query?.sessionId || req.headers?.['x-hls-session-id']);
 }
 
+function getSeriesHlsSessionKey(idCapitulo, sessionId) {
+  return `${String(idCapitulo)}:${String(sessionId)}`;
+}
+
+function hashPlaybackToken(playbackToken) {
+  return crypto.createHash('sha256').update(String(playbackToken || '')).digest('hex');
+}
+
+function registerSeriesHlsSession({ idCapitulo, sessionId, userId, playbackToken, expiresAt }) {
+  const key = getSeriesHlsSessionKey(idCapitulo, sessionId);
+  const current = seriesHlsSessions.get(key);
+  const normalizedExpiresAt = Number(expiresAt) || Date.now() + (15 * 60 * 1000);
+  if (normalizedExpiresAt <= Date.now()) return false;
+  if (current && (current.userId !== userId || current.tokenHash !== hashPlaybackToken(playbackToken))) return false;
+
+  const session = current || {
+    idCapitulo,
+    sessionId,
+    userId,
+    tokenHash: hashPlaybackToken(playbackToken),
+    expiresAt: normalizedExpiresAt,
+    timer: null,
+  };
+  if (session.timer) clearTimeout(session.timer);
+  session.expiresAt = Math.min(session.expiresAt, normalizedExpiresAt);
+  session.timer = setTimeout(() => {
+    const active = seriesHlsSessions.get(key);
+    if (active === session) seriesHlsSessions.delete(key);
+  }, Math.max(1, session.expiresAt - Date.now()));
+  seriesHlsSessions.set(key, session);
+  return true;
+}
+
+function validateSeriesHlsSession({ idCapitulo, sessionId, userId, playbackToken }) {
+  const key = getSeriesHlsSessionKey(idCapitulo, sessionId);
+  const session = seriesHlsSessions.get(key);
+  if (!session || session.expiresAt <= Date.now()) {
+    if (session) {
+      clearTimeout(session.timer);
+      seriesHlsSessions.delete(key);
+    }
+    return false;
+  }
+  return session.userId === userId && session.tokenHash === hashPlaybackToken(playbackToken);
+}
+
+function unregisterSeriesHlsSession(idCapitulo, sessionId) {
+  const key = getSeriesHlsSessionKey(idCapitulo, sessionId);
+  const session = seriesHlsSessions.get(key);
+  if (!session) return;
+  clearTimeout(session.timer);
+  seriesHlsSessions.delete(key);
+}
+
 function getMovieHlsContext(idPeli, videoUrl, sessionId = 'default', routePrefix = '/peliculas/hls', cacheRoot = config.cacheDir, cacheNamespace = 'movie') {
   const safeId = sanitizeCacheName(idPeli);
   const hash = crypto.createHash('sha1').update(`${idPeli}:${videoUrl}`).digest('hex').slice(0, 16);
@@ -105,17 +158,6 @@ function getSeriesHlsContext(idCapitulo, videoUrl, sessionId = 'default') {
     '/series/hls',
     config.seriesCacheDir,
     'series',
-  );
-}
-
-function getCourseHlsContext(lessonId, videoUrl, sessionId = 'default') {
-  return getMovieHlsContext(
-    lessonId,
-    videoUrl,
-    sessionId,
-    '/cursos/hls',
-    config.courseCacheDir,
-    'course',
   );
 }
 
@@ -605,7 +647,6 @@ function serveHlsFile(req, res, filePath, contentType, cacheControl) {
 
 module.exports = {
   createMovieHlsSessionId,
-  getCourseHlsContext,
   getMovieHlsContext,
   getSeriesHlsContext,
   getMovieHlsStatus,
@@ -621,4 +662,8 @@ module.exports = {
   cleanupMovieHlsSession,
   getHlsRuntimeSnapshot,
   unregisterDirectStream,
+  normalizeMovieHlsSessionId,
+  registerSeriesHlsSession,
+  validateSeriesHlsSession,
+  unregisterSeriesHlsSession,
 };

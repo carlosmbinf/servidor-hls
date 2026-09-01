@@ -1,18 +1,17 @@
 const axios = require('axios');
 const express = require('express');
-const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const {
   cleanupMovieHlsSession,
   createMovieHlsSessionId,
-  getCourseHlsContext,
   getMovieHlsContext,
   getSeriesHlsContext,
   getMovieHlsStatus,
   getHlsRuntimeSnapshot,
   getRequestedMovieHlsSessionId,
+  normalizeMovieHlsSessionId,
   normalizeMovieHlsStartAt,
   probeMovieHlsMetadata,
   registerDirectStream,
@@ -21,6 +20,9 @@ const {
   startMovieHlsConversion,
   stopMovieHlsJob,
   touchMovieHlsJob,
+  registerSeriesHlsSession,
+  unregisterSeriesHlsSession,
+  validateSeriesHlsSession,
   unregisterDirectStream,
 } = require('./hlsService');
 const { getMovie, getMovieVideoForStreaming, getVideoContentType, normalizeSubtitleToVtt } = require('./movieService');
@@ -30,6 +32,7 @@ const {
   getSeriesPlaybackToken,
   getVideoContentType: getSeriesVideoContentType,
   normalizeChapterSubtitle,
+  verifySeriesPlaybackToken,
 } = require('./seriesService');
 const {
   authenticateAdmin,
@@ -43,48 +46,6 @@ const {
 const { renderAdminDashboardPage, renderAdminLoginPage } = require('./adminViews');
 
 const router = express.Router();
-const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
-const courseHlsContexts = new Map();
-
-function getCourseHlsContextKey(lessonId, sessionId) {
-  return `${lessonId}:${sessionId}`;
-}
-
-function normalizeCourseSourceUrl(value) {
-  try {
-    const sourceUrl = new URL(String(value || ''));
-    const expectedOrigin = new URL(config.meteorHttpOrigin);
-    const isCourseMediaPath = /^\/cursos\/media\/stream\/[^/]+$/.test(sourceUrl.pathname);
-    if (
-      !['http:', 'https:'].includes(sourceUrl.protocol)
-      || sourceUrl.origin !== expectedOrigin.origin
-      || !isCourseMediaPath
-      || !sourceUrl.searchParams.get('token')
-    ) return null;
-    return sourceUrl.toString();
-  } catch (_error) {
-    return null;
-  }
-}
-
-async function assertCourseSourceAvailable(sourceUrl) {
-  const response = await axios.get(sourceUrl, {
-    headers: { Range: 'bytes=0-0', 'User-Agent': 'VIDKAR-HLS-Source-Check/1.0' },
-    responseType: 'stream',
-    timeout: 10000,
-    validateStatus: () => true,
-  });
-  response.data?.destroy?.();
-  if (response.status !== 200 && response.status !== 206) {
-    const error = new Error(`El origen del curso respondió HTTP ${response.status}`);
-    error.statusCode = response.status;
-    throw error;
-  }
-}
-
-function getStoredCourseHlsContext(lessonId, sessionId) {
-  return courseHlsContexts.get(getCourseHlsContextKey(lessonId, sessionId)) || null;
-}
 
 function renderStreamingLandingPage() {
   const currentYear = new Date().getFullYear();
@@ -339,15 +300,20 @@ function isSuccessfulStreamStatus(status) {
   return status === 200 || status === 206;
 }
 
+function redactSensitiveText(value) {
+  return String(value || '').replace(/((?:playbackToken|access_token|refresh_token|authorization|signature|token|sig|key)=)([^&\s]+)/gi, '$1[redacted]');
+}
+
 function buildStreamErrorReport(error, context = {}) {
   return {
     name: error?.name || 'Error',
-    message: error?.message || 'Error desconocido al preparar stream de pelicula',
+    message: redactSensitiveText(error?.message || 'Error desconocido al preparar stream de pelicula'),
     code: error?.code,
     status: error?.response?.status,
     statusText: error?.response?.statusText,
     method: error?.config?.method,
-    url: error?.config?.url,
+    url: error?.config?.url ? '[redacted-url]' : undefined,
+    hasUrl: Boolean(error?.config?.url),
     hasRange: Boolean(error?.config?.headers?.Range),
     ...context,
   };
@@ -367,6 +333,29 @@ function sendSeriesResultError(res, result) {
   });
 }
 
+function getSeriesSessionIdInput(req) {
+  return req.params?.sessionId ?? req.query?.sessionId ?? req.headers?.['x-hls-session-id'];
+}
+
+function getSeriesSessionId(req, { allowMissing = false } = {}) {
+  const rawSessionId = getSeriesSessionIdInput(req);
+  if (rawSessionId == null || String(rawSessionId).trim() === '') {
+    return allowMissing ? createMovieHlsSessionId() : null;
+  }
+  return normalizeMovieHlsSessionId(rawSessionId);
+}
+
+function authorizeSeriesHlsSession(idCapitulo, sessionId, playbackToken) {
+  const payload = verifySeriesPlaybackToken(playbackToken, idCapitulo);
+  if (!payload) {
+    return { error: 'not-authorized', message: 'La autorización de reproducción no es válida o expiró.', status: 401 };
+  }
+  if (!validateSeriesHlsSession({ idCapitulo, sessionId, userId: payload.userId, playbackToken })) {
+    return { error: 'session-not-authorized', message: 'La sesión de reproducción no es válida.', status: 403 };
+  }
+  return { payload };
+}
+
 function serveSeriesHlsPlaylist(req, res, playlistPath, playbackToken, cacheControl) {
   if (!fs.existsSync(playlistPath)) return res.status(404).send('Playlist no disponible');
 
@@ -376,7 +365,7 @@ function serveSeriesHlsPlaylist(req, res, playlistPath, playbackToken, cacheCont
       (_match, segmentName, lineEnding) => `${segmentName}?playbackToken=${encodeURIComponent(playbackToken)}${lineEnding}`,
     );
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
-    res.setHeader('Cache-Control', cacheControl);
+    res.setHeader('Cache-Control', 'private, no-store');
     return res.send(playlist);
   } catch (error) {
     console.error('No se pudo leer playlist HLS de serie:', error?.message || error);
@@ -429,8 +418,8 @@ const sendRuntimeSnapshot = (_req, res) => {
   res.json({ success: true, ...getHlsRuntimeSnapshot() });
 };
 
-router.get('/api/runtime', sendRuntimeSnapshot);
-router.get('/admin/api/runtime', sendRuntimeSnapshot);
+router.get('/api/runtime', requireAdminApi, sendRuntimeSnapshot);
+router.get('/admin/api/runtime', requireAdminApi, sendRuntimeSnapshot);
 
 router.get('/peliculas/stream/:idPeli', async (req, res) => {
   const idPeli = req.params?.idPeli || req.query?.idPeli || req.query?.id;
@@ -463,7 +452,6 @@ router.get('/peliculas/stream/:idPeli', async (req, res) => {
       timeout: 15000,
       maxRedirects: 5,
       validateStatus: isSuccessfulStreamStatus,
-      httpsAgent: insecureHttpsAgent,
     });
 
     upstreamStream = upstreamResponse.data;
@@ -630,6 +618,12 @@ router.get('/peliculas/hls/:idPeli/:sessionId/:segmentName', async (req, res) =>
   }
 });
 
+router.use('/series', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('Pragma', 'no-cache');
+  next();
+});
+
 router.get('/series/stream/:idCapitulo', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
   const playbackToken = getSeriesPlaybackToken(req);
@@ -662,7 +656,6 @@ router.get('/series/stream/:idCapitulo', async (req, res) => {
       timeout: 15000,
       maxRedirects: 5,
       validateStatus: isSuccessfulStreamStatus,
-      httpsAgent: insecureHttpsAgent,
     });
 
     upstreamStream = upstreamResponse.data;
@@ -684,7 +677,7 @@ router.get('/series/stream/:idCapitulo', async (req, res) => {
     res.status(upstreamResponse.status);
     res.setHeader('Content-Type', upstreamResponse.headers['content-type'] || getSeriesVideoContentType(result.videoUrl));
     res.setHeader('Accept-Ranges', upstreamResponse.headers['accept-ranges'] || 'bytes');
-    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Cache-Control', 'private, no-store');
     if (upstreamResponse.headers['content-length']) res.setHeader('Content-Length', upstreamResponse.headers['content-length']);
     if (upstreamResponse.headers['content-range']) res.setHeader('Content-Range', upstreamResponse.headers['content-range']);
 
@@ -713,14 +706,20 @@ router.get('/series/stream/:idCapitulo', async (req, res) => {
 router.post('/series/hls/:idCapitulo/prepare', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
   const playbackToken = getSeriesPlaybackToken(req);
-  const sessionId = getRequestedMovieHlsSessionId(req) || createMovieHlsSessionId();
+  const sessionId = getSeriesSessionId(req, { allowMissing: true });
   let startAtSeconds = normalizeMovieHlsStartAt(req.query?.startAt || req.body?.startAt);
 
   if (!idCapitulo) return sendJson(res, 400, { success: false, error: 'Debe enviar el id del capítulo' });
+  if (!sessionId) return sendJson(res, 400, { success: false, error: 'La sesión de reproducción no es válida' });
 
   try {
     const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
     if (result.error) return sendSeriesResultError(res, result);
+    const payload = verifySeriesPlaybackToken(playbackToken, idCapitulo);
+    if (!payload) return sendSeriesResultError(res, { error: 'not-authorized', message: 'La autorización de reproducción no es válida o expiró.', status: 401 });
+    if (!registerSeriesHlsSession({ idCapitulo, sessionId, userId: payload.userId, playbackToken, expiresAt: Number(payload.exp) * 1000 })) {
+      return sendSeriesResultError(res, { error: 'session-not-authorized', message: 'La sesión de reproducción no es válida.', status: 403 });
+    }
 
     const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
     const metadata = await probeMovieHlsMetadata(context, result.videoUrl);
@@ -750,14 +749,16 @@ router.post('/series/hls/:idCapitulo/prepare', async (req, res) => {
 router.get('/series/hls/:idCapitulo/status', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
   const playbackToken = getSeriesPlaybackToken(req);
-  const sessionId = getRequestedMovieHlsSessionId(req);
+  const sessionId = getSeriesSessionId(req);
 
   if (!idCapitulo) return sendJson(res, 400, { success: false, error: 'Debe enviar el id del capítulo' });
-  if (!sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar la sesión de reproducción' });
+  if (!sessionId) return sendJson(res, 400, { success: false, error: 'La sesión de reproducción no es válida' });
 
   try {
     const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
     if (result.error) return sendSeriesResultError(res, result);
+    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId, playbackToken);
+    if (authorization.error) return sendSeriesResultError(res, authorization);
 
     const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
     await probeMovieHlsMetadata(context, result.videoUrl);
@@ -777,17 +778,20 @@ router.get('/series/hls/:idCapitulo/status', async (req, res) => {
 router.post('/series/hls/:idCapitulo/:sessionId/cancel', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
   const playbackToken = getSeriesPlaybackToken(req);
-  const sessionId = getRequestedMovieHlsSessionId(req);
+  const sessionId = getSeriesSessionId(req);
 
-  if (!idCapitulo || !sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar capítulo y sesión de reproducción' });
+  if (!idCapitulo || !sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar capítulo y una sesión válida de reproducción' });
 
   try {
     const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
     if (result.error) return sendSeriesResultError(res, result);
+    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId, playbackToken);
+    if (authorization.error) return sendSeriesResultError(res, authorization);
 
     const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
     const stopped = stopMovieHlsJob(context, 'client-cancel', true);
     if (!stopped) cleanupMovieHlsSession(context);
+    unregisterSeriesHlsSession(idCapitulo, sessionId);
     return sendJson(res, 200, { success: true, stopped, sessionId });
   } catch (error) {
     console.error('No se pudo cancelar HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-cancel' }));
@@ -798,13 +802,15 @@ router.post('/series/hls/:idCapitulo/:sessionId/cancel', async (req, res) => {
 router.get('/series/hls/:idCapitulo/:sessionId/index.m3u8', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
   const playbackToken = getSeriesPlaybackToken(req);
-  const sessionId = getRequestedMovieHlsSessionId(req);
+  const sessionId = getSeriesSessionId(req);
 
-  if (!idCapitulo || !sessionId) return res.status(400).send('Debe enviar capítulo y sesión de reproducción');
+  if (!idCapitulo || !sessionId) return res.status(400).send('Debe enviar capítulo y una sesión válida de reproducción');
 
   try {
     const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
     if (result.error) return res.status(result.status || 404).send(result.message || 'Capítulo no disponible');
+    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId, playbackToken);
+    if (authorization.error) return res.status(authorization.status).send(authorization.message);
 
     const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
     touchMovieHlsJob(context);
@@ -821,7 +827,7 @@ router.get('/series/hls/:idCapitulo/:sessionId/index.m3u8', async (req, res) => 
 router.get('/series/hls/:idCapitulo/:sessionId/:segmentName', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
   const playbackToken = getSeriesPlaybackToken(req);
-  const sessionId = getRequestedMovieHlsSessionId(req);
+  const sessionId = getSeriesSessionId(req);
   const segmentName = req.params?.segmentName;
 
   if (!idCapitulo || !sessionId || !/^segment_\d+\.ts$/.test(segmentName || '')) {
@@ -831,6 +837,8 @@ router.get('/series/hls/:idCapitulo/:sessionId/:segmentName', async (req, res) =
   try {
     const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
     if (result.error) return res.status(result.status || 404).send(result.message || 'Capítulo no disponible');
+    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId, playbackToken);
+    if (authorization.error) return res.status(authorization.status).send(authorization.message);
 
     const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
     touchMovieHlsJob(context);
@@ -842,6 +850,8 @@ router.get('/series/hls/:idCapitulo/:sessionId/:segmentName', async (req, res) =
 });
 
 router.get('/getsubtitleSeries', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('Pragma', 'no-cache');
   const idCapitulo = req.query?.idCapitulo || req.query?.idSeries || req.query?.id;
   const playbackToken = getSeriesPlaybackToken(req);
   if (!idCapitulo) return res.status(400).send('Debe enviar el id del capítulo');

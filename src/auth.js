@@ -153,8 +153,20 @@ function requireAdminPage(req, res, next) {
     res.redirect('/admin/login');
     return;
   }
-  req.adminSession = session;
-  next();
+  fetchLoggedUser(session.user.id)
+    .then((user) => {
+      if (!user || user.profile?.role !== 'admin') {
+        destroyAdminSession(req);
+        res.redirect('/admin/login');
+        return;
+      }
+      session.user = { ...session.user, ...user, id: user.id || session.user.id };
+      req.adminSession = session;
+      next();
+    })
+    .catch(() => {
+      res.redirect('/admin/login');
+    });
 }
 
 function requireAdminApi(req, res, next) {
@@ -163,8 +175,20 @@ function requireAdminApi(req, res, next) {
     res.status(401).json({ success: false, error: 'Sesion requerida' });
     return;
   }
-  req.adminSession = session;
-  next();
+  fetchLoggedUser(session.user.id)
+    .then((user) => {
+      if (!user || user.profile?.role !== 'admin') {
+        destroyAdminSession(req);
+        res.status(401).json({ success: false, error: 'Sesion no autorizada' });
+        return;
+      }
+      session.user = { ...session.user, ...user, id: user.id || session.user.id };
+      req.adminSession = session;
+      next();
+    })
+    .catch(() => {
+      res.status(503).json({ success: false, error: 'No se pudo validar la sesion' });
+    });
 }
 
 module.exports = {

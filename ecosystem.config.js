@@ -10,10 +10,15 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 3050,
-        METEOR_DDP_ENDPOINT: 'ws://www.vidkar.com:3000/websocket',
+        METEOR_DDP_ENDPOINT: process.env.METEOR_DDP_ENDPOINT,
+        METEOR_HTTP_ORIGIN: process.env.METEOR_HTTP_ORIGIN,
+        ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
         HLS_CACHE_DIR: './.vidkar-cache/peliculas-hls',
+        SERIES_HLS_CACHE_DIR: './.vidkar-cache/series-hls',
         HLS_IDLE_TIMEOUT_MS: 45000,
-        FFMPEG_PATH: '/usr/bin/ffmpeg'
+        FFMPEG_PATH: '/usr/bin/ffmpeg',
+        HLS_PLAYBACK_SECRET: process.env.HLS_PLAYBACK_SECRET,
+        ADMIN_SESSION_SECRET: process.env.ADMIN_SESSION_SECRET,
       }
     }
   ]
