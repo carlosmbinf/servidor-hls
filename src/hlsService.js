@@ -6,9 +6,31 @@ const ffmpegStaticPath = require('ffmpeg-static');
 const config = require('./config');
 
 const HLS_PLAYLIST_NAME = 'index.m3u8';
-const movieHlsJobs = new Map();
-const movieHlsMetadataPromises = new Map();
+const hlsJobsByNamespace = new Map([
+  ['movie', new Map()],
+  ['series', new Map()],
+]);
+const hlsMetadataPromisesByNamespace = new Map([
+  ['movie', new Map()],
+  ['series', new Map()],
+]);
 const activeDirectStreams = new Map();
+
+function getHlsNamespace(context) {
+  return context?.namespace || 'movie';
+}
+
+function getHlsJobs(context) {
+  const namespace = getHlsNamespace(context);
+  if (!hlsJobsByNamespace.has(namespace)) hlsJobsByNamespace.set(namespace, new Map());
+  return hlsJobsByNamespace.get(namespace);
+}
+
+function getHlsMetadataPromises(context) {
+  const namespace = getHlsNamespace(context);
+  if (!hlsMetadataPromisesByNamespace.has(namespace)) hlsMetadataPromisesByNamespace.set(namespace, new Map());
+  return hlsMetadataPromisesByNamespace.get(namespace);
+}
 
 function getFfmpegPath() {
   return config.ffmpegPath || ffmpegStaticPath || 'ffmpeg';
@@ -62,6 +84,7 @@ function getMovieHlsContext(idPeli, videoUrl, sessionId = 'default', routePrefix
     dir,
     movieCacheKey,
     movieDir,
+    namespace: cacheNamespace,
     playlistPath: path.join(dir, HLS_PLAYLIST_NAME),
     readyPath: path.join(dir, 'ready.json'),
     errorPath: path.join(dir, 'error.json'),
@@ -72,8 +95,15 @@ function getMovieHlsContext(idPeli, videoUrl, sessionId = 'default', routePrefix
   };
 }
 
-function getCourseHlsContext(lessonId, videoUrl, sessionId = 'default') {
-  return getMovieHlsContext(lessonId, videoUrl, sessionId, '/cursos/hls', config.courseCacheDir, 'course');
+function getSeriesHlsContext(idCapitulo, videoUrl, sessionId = 'default') {
+  return getMovieHlsContext(
+    idCapitulo,
+    videoUrl,
+    sessionId,
+    '/series/hls',
+    config.seriesCacheDir,
+    'series',
+  );
 }
 
 function readJsonFile(filePath) {
@@ -101,7 +131,9 @@ async function probeMovieHlsMetadata(context, videoUrl) {
     return { durationSeconds: Number(cachedMetadata.durationSeconds) || null };
   }
 
-  const currentPromise = movieHlsMetadataPromises.get(context.movieCacheKey);
+  const metadataPromises = getHlsMetadataPromises(context);
+  const metadataKey = context.movieCacheKey;
+  const currentPromise = metadataPromises.get(metadataKey);
   if (currentPromise) return currentPromise;
 
   const probePromise = new Promise((resolve) => {
@@ -152,10 +184,10 @@ async function probeMovieHlsMetadata(context, videoUrl) {
       resolve({ durationSeconds });
     });
   }).finally(() => {
-    movieHlsMetadataPromises.delete(context.movieCacheKey);
+    metadataPromises.delete(metadataKey);
   });
 
-  movieHlsMetadataPromises.set(context.movieCacheKey, probePromise);
+  metadataPromises.set(metadataKey, probePromise);
   return probePromise;
 }
 
@@ -262,7 +294,8 @@ function cleanupMovieHlsSession(context) {
 }
 
 function stopMovieHlsJob(context, reason = 'manual', cleanup = true) {
-  const job = movieHlsJobs.get(context.cacheKey);
+  const jobs = getHlsJobs(context);
+  const job = jobs.get(context.cacheKey);
   if (!job) {
     if (cleanup) cleanupMovieHlsSession(context);
     return false;
@@ -290,7 +323,7 @@ function scheduleMovieHlsIdleStop(context, job) {
   if (!job) return;
   if (job.idleTimer) clearTimeout(job.idleTimer);
   job.idleTimer = setTimeout(() => {
-    const currentJob = movieHlsJobs.get(context.cacheKey);
+    const currentJob = getHlsJobs(context).get(context.cacheKey);
     if (!currentJob) return;
     const idleForMs = Date.now() - (currentJob.lastAccessAt || currentJob.startedAtMs || Date.now());
     if (idleForMs >= config.hlsIdleTimeoutMs) {
@@ -303,14 +336,14 @@ function scheduleMovieHlsIdleStop(context, job) {
 }
 
 function touchMovieHlsJob(context) {
-  const job = movieHlsJobs.get(context.cacheKey);
+  const job = getHlsJobs(context).get(context.cacheKey);
   if (!job) return;
   job.lastAccessAt = Date.now();
   scheduleMovieHlsIdleStop(context, job);
 }
 
 function getMovieHlsStatus(context) {
-  const activeJob = movieHlsJobs.get(context.cacheKey);
+  const activeJob = getHlsJobs(context).get(context.cacheKey);
   if (activeJob) touchMovieHlsJob(context);
   const segmentsCount = countHlsSegments(context.dir);
   const playlistReady = fs.existsSync(context.playlistPath) && segmentsCount > 0;
@@ -457,7 +490,8 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
     killTimer: null,
     stoppedReason: '',
   };
-  movieHlsJobs.set(context.cacheKey, job);
+  const jobs = getHlsJobs(context);
+  jobs.set(context.cacheKey, job);
   scheduleMovieHlsIdleStop(context, job);
   console.log(`Preparando HLS: ${movieTitle || context.cacheKey} desde ${startAtSeconds}s`);
 
@@ -473,14 +507,14 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
     fs.writeFileSync(context.errorPath, JSON.stringify({ message, failedAt: new Date().toISOString() }, null, 2));
     if (job.idleTimer) clearTimeout(job.idleTimer);
     if (job.killTimer) clearTimeout(job.killTimer);
-    movieHlsJobs.delete(context.cacheKey);
+    jobs.delete(context.cacheKey);
     console.error('Error iniciando FFmpeg HLS:', message);
   });
 
   ffmpeg.on('close', (code) => {
     if (job.idleTimer) clearTimeout(job.idleTimer);
     if (job.killTimer) clearTimeout(job.killTimer);
-    movieHlsJobs.delete(context.cacheKey);
+    jobs.delete(context.cacheKey);
 
     if (job.stoppedReason) {
       if (job.cleanupOnStop) cleanupMovieHlsSession(context);
@@ -504,8 +538,9 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
 }
 
 function getHlsRuntimeSnapshot() {
-  const activeJobs = Array.from(movieHlsJobs.entries()).map(([cacheKey, job]) => ({
+  const activeJobs = Array.from(hlsJobsByNamespace.entries()).flatMap(([namespace, jobs]) => Array.from(jobs.entries()).map(([cacheKey, job]) => ({
     cacheKey,
+    namespace,
     durationSeconds: Number(job.durationSeconds || 0) || null,
     movieTitle: job.movieTitle,
     pid: job.process?.pid || null,
@@ -518,7 +553,9 @@ function getHlsRuntimeSnapshot() {
     startedAt: job.startedAt,
     stoppedReason: job.stoppedReason || null,
     uptimeMs: Date.now() - (job.startedAtMs || Date.now()),
-  }));
+  })));
+
+  const activeFfmpegJobs = activeJobs.length;
 
   return {
     activeDirectStreams: getDirectStreamsSnapshot(),
@@ -528,8 +565,8 @@ function getHlsRuntimeSnapshot() {
     now: new Date().toISOString(),
     totals: {
       activeDirectStreams: activeDirectStreams.size,
-      activeFfmpegJobs: movieHlsJobs.size,
-      activeStreams: activeDirectStreams.size + movieHlsJobs.size,
+      activeFfmpegJobs,
+      activeStreams: activeDirectStreams.size + activeFfmpegJobs,
     },
   };
 }
@@ -555,8 +592,8 @@ function serveHlsFile(req, res, filePath, contentType, cacheControl) {
 
 module.exports = {
   createMovieHlsSessionId,
-  getCourseHlsContext,
   getMovieHlsContext,
+  getSeriesHlsContext,
   getMovieHlsStatus,
   getRequestedMovieHlsSessionId,
   normalizeMovieHlsStartAt,

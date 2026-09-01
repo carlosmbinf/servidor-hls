@@ -1,13 +1,14 @@
 const axios = require('axios');
 const express = require('express');
 const https = require('https');
+const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const {
   cleanupMovieHlsSession,
   createMovieHlsSessionId,
-  getCourseHlsContext,
   getMovieHlsContext,
+  getSeriesHlsContext,
   getMovieHlsStatus,
   getHlsRuntimeSnapshot,
   getRequestedMovieHlsSessionId,
@@ -23,6 +24,13 @@ const {
 } = require('./hlsService');
 const { getMovie, getMovieVideoForStreaming, getVideoContentType, normalizeSubtitleToVtt } = require('./movieService');
 const {
+  getChapter,
+  getChapterVideoForStreaming,
+  getSeriesPlaybackToken,
+  getVideoContentType: getSeriesVideoContentType,
+  normalizeChapterSubtitle,
+} = require('./seriesService');
+const {
   authenticateAdmin,
   clearSessionCookie,
   createAdminSession,
@@ -35,44 +43,6 @@ const { renderAdminDashboardPage, renderAdminLoginPage } = require('./adminViews
 
 const router = express.Router();
 const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
-const courseHlsContexts = new Map();
-
-function getCourseHlsContextKey(lessonId, sessionId) {
-  return `${lessonId}:${sessionId}`;
-}
-
-function normalizeCourseSourceUrl(value) {
-  try {
-    const sourceUrl = new URL(String(value || ''));
-    const expectedOrigin = new URL(config.meteorHttpOrigin);
-    const isCourseMediaPath = /^\/cursos\/media\/stream\/[^/]+$/.test(sourceUrl.pathname);
-    if (sourceUrl.origin !== expectedOrigin.origin || !isCourseMediaPath || !sourceUrl.searchParams.get('token')) {
-      return null;
-    }
-    return sourceUrl.toString();
-  } catch (_error) {
-    return null;
-  }
-}
-
-async function assertCourseSourceAvailable(sourceUrl) {
-  const response = await axios.get(sourceUrl, {
-    headers: { Range: 'bytes=0-0', 'User-Agent': 'VIDKAR-HLS-Source-Check/1.0' },
-    responseType: 'stream',
-    timeout: 10000,
-    validateStatus: () => true,
-  });
-  response.data?.destroy?.();
-  if (response.status !== 200 && response.status !== 206) {
-    const error = new Error(`El origen del curso respondió HTTP ${response.status}`);
-    error.statusCode = response.status;
-    throw error;
-  }
-}
-
-function getStoredCourseHlsContext(lessonId, sessionId) {
-  return courseHlsContexts.get(getCourseHlsContextKey(lessonId, sessionId)) || null;
-}
 
 function renderStreamingLandingPage() {
   const currentYear = new Date().getFullYear();
@@ -341,6 +311,37 @@ function buildStreamErrorReport(error, context = {}) {
   };
 }
 
+function withSeriesPlaybackToken(url, playbackToken) {
+  if (!url || !playbackToken) return url;
+  const separator = String(url).includes('?') ? '&' : '?';
+  return `${url}${separator}playbackToken=${encodeURIComponent(playbackToken)}`;
+}
+
+function sendSeriesResultError(res, result) {
+  return sendJson(res, result.status || 404, {
+    success: false,
+    error: result.message || 'No se pudo obtener el capítulo',
+    code: result.error,
+  });
+}
+
+function serveSeriesHlsPlaylist(req, res, playlistPath, playbackToken, cacheControl) {
+  if (!fs.existsSync(playlistPath)) return res.status(404).send('Playlist no disponible');
+
+  try {
+    const playlist = fs.readFileSync(playlistPath, 'utf8').replace(
+      /^(segment_\d+\.ts)(\r?)$/gm,
+      (_match, segmentName, lineEnding) => `${segmentName}?playbackToken=${encodeURIComponent(playbackToken)}${lineEnding}`,
+    );
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+    res.setHeader('Cache-Control', cacheControl);
+    return res.send(playlist);
+  } catch (error) {
+    console.error('No se pudo leer playlist HLS de serie:', error?.message || error);
+    return res.status(500).send('No se pudo servir la playlist HLS');
+  }
+}
+
 router.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'servidor-hls-vidkar', now: new Date().toISOString() });
 });
@@ -587,6 +588,233 @@ router.get('/peliculas/hls/:idPeli/:sessionId/:segmentName', async (req, res) =>
   }
 });
 
+router.get('/series/stream/:idCapitulo', async (req, res) => {
+  const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
+  const playbackToken = getSeriesPlaybackToken(req);
+  let upstreamStream = null;
+  let directStreamId = null;
+  let streamClosed = false;
+
+  if (!idCapitulo) return res.status(400).send('Debe enviar el id del capítulo');
+
+  try {
+    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    if (result.error) return sendSeriesResultError(res, result);
+
+    const requestHeaders = req.headers.range ? { Range: req.headers.range } : {};
+    const closeUpstream = () => {
+      if (streamClosed) return;
+      streamClosed = true;
+      unregisterDirectStream(directStreamId);
+      if (upstreamStream?.destroy) upstreamStream.destroy();
+    };
+
+    req.on('aborted', closeUpstream);
+    res.on('close', closeUpstream);
+
+    const upstreamResponse = await axios({
+      url: result.videoUrl,
+      method: 'GET',
+      responseType: 'stream',
+      headers: requestHeaders,
+      timeout: 15000,
+      maxRedirects: 5,
+      validateStatus: isSuccessfulStreamStatus,
+      httpsAgent: insecureHttpsAgent,
+    });
+
+    upstreamStream = upstreamResponse.data;
+    directStreamId = registerDirectStream({
+      idPeli: idCapitulo,
+      movieTitle: result.chapter?.nombre,
+      videoUrl: result.videoUrl,
+      range: req.headers.range || null,
+      ip: req.ip || req.socket?.remoteAddress || null,
+      userAgent: req.headers['user-agent'] || null,
+      resourceType: 'series',
+    });
+    if (streamClosed) {
+      unregisterDirectStream(directStreamId);
+      upstreamStream.destroy();
+      return undefined;
+    }
+
+    res.status(upstreamResponse.status);
+    res.setHeader('Content-Type', upstreamResponse.headers['content-type'] || getSeriesVideoContentType(result.videoUrl));
+    res.setHeader('Accept-Ranges', upstreamResponse.headers['accept-ranges'] || 'bytes');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    if (upstreamResponse.headers['content-length']) res.setHeader('Content-Length', upstreamResponse.headers['content-length']);
+    if (upstreamResponse.headers['content-range']) res.setHeader('Content-Range', upstreamResponse.headers['content-range']);
+
+    upstreamStream.on('end', () => {
+      streamClosed = true;
+      unregisterDirectStream(directStreamId);
+    });
+    upstreamStream.on('error', (error) => {
+      unregisterDirectStream(directStreamId);
+      console.error('Error al transmitir capítulo:', result.chapter?.nombre || idCapitulo, error?.message || error);
+      if (!res.headersSent) res.status(502);
+      res.end();
+    });
+
+    return upstreamStream.pipe(res);
+  } catch (error) {
+    const upstreamStatus = error?.response?.status;
+    console.error('Error al preparar stream de capítulo:', buildStreamErrorReport(error, { idCapitulo, target: 'series-stream' }));
+    if (streamClosed || res.writableEnded) return undefined;
+    return res.status(upstreamStatus || 500).send(upstreamStatus === 503
+      ? 'El servidor de video no está disponible en este momento'
+      : 'Error al preparar la reproducción');
+  }
+});
+
+router.post('/series/hls/:idCapitulo/prepare', async (req, res) => {
+  const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
+  const playbackToken = getSeriesPlaybackToken(req);
+  const sessionId = getRequestedMovieHlsSessionId(req) || createMovieHlsSessionId();
+  let startAtSeconds = normalizeMovieHlsStartAt(req.query?.startAt || req.body?.startAt);
+
+  if (!idCapitulo) return sendJson(res, 400, { success: false, error: 'Debe enviar el id del capítulo' });
+
+  try {
+    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    if (result.error) return sendSeriesResultError(res, result);
+
+    const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
+    const metadata = await probeMovieHlsMetadata(context, result.videoUrl);
+    if (metadata.durationSeconds && startAtSeconds >= metadata.durationSeconds) {
+      startAtSeconds = Math.max(0, Math.floor(metadata.durationSeconds) - 5);
+    }
+
+    const status = startMovieHlsConversion({
+      context,
+      durationSeconds: metadata.durationSeconds,
+      videoUrl: result.videoUrl,
+      movieTitle: result.chapter?.nombre,
+      startAtSeconds,
+    });
+
+    return sendJson(res, 200, {
+      success: true,
+      ...status,
+      playlistUrl: withSeriesPlaybackToken(status.playlistUrl, playbackToken),
+    });
+  } catch (error) {
+    console.error('No se pudo preparar HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, target: 'series-hls-prepare' }));
+    return sendJson(res, 500, { success: false, error: 'No se pudo preparar la conversión del capítulo' });
+  }
+});
+
+router.get('/series/hls/:idCapitulo/status', async (req, res) => {
+  const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
+  const playbackToken = getSeriesPlaybackToken(req);
+  const sessionId = getRequestedMovieHlsSessionId(req);
+
+  if (!idCapitulo) return sendJson(res, 400, { success: false, error: 'Debe enviar el id del capítulo' });
+  if (!sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar la sesión de reproducción' });
+
+  try {
+    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    if (result.error) return sendSeriesResultError(res, result);
+
+    const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
+    await probeMovieHlsMetadata(context, result.videoUrl);
+    touchMovieHlsJob(context);
+    const status = getMovieHlsStatus(context);
+    return sendJson(res, 200, {
+      success: true,
+      ...status,
+      playlistUrl: withSeriesPlaybackToken(status.playlistUrl, playbackToken),
+    });
+  } catch (error) {
+    console.error('No se pudo consultar HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-status' }));
+    return sendJson(res, 500, { success: false, error: 'No se pudo consultar el estado de conversión' });
+  }
+});
+
+router.post('/series/hls/:idCapitulo/:sessionId/cancel', async (req, res) => {
+  const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
+  const playbackToken = getSeriesPlaybackToken(req);
+  const sessionId = getRequestedMovieHlsSessionId(req);
+
+  if (!idCapitulo || !sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar capítulo y sesión de reproducción' });
+
+  try {
+    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    if (result.error) return sendSeriesResultError(res, result);
+
+    const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
+    const stopped = stopMovieHlsJob(context, 'client-cancel', true);
+    if (!stopped) cleanupMovieHlsSession(context);
+    return sendJson(res, 200, { success: true, stopped, sessionId });
+  } catch (error) {
+    console.error('No se pudo cancelar HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-cancel' }));
+    return sendJson(res, 500, { success: false, error: 'No se pudo cancelar la conversión del capítulo' });
+  }
+});
+
+router.get('/series/hls/:idCapitulo/:sessionId/index.m3u8', async (req, res) => {
+  const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
+  const playbackToken = getSeriesPlaybackToken(req);
+  const sessionId = getRequestedMovieHlsSessionId(req);
+
+  if (!idCapitulo || !sessionId) return res.status(400).send('Debe enviar capítulo y sesión de reproducción');
+
+  try {
+    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    if (result.error) return res.status(result.status || 404).send(result.message || 'Capítulo no disponible');
+
+    const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
+    touchMovieHlsJob(context);
+    const status = getMovieHlsStatus(context);
+    if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
+
+    return serveSeriesHlsPlaylist(req, res, context.playlistPath, playbackToken, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
+  } catch (error) {
+    console.error('No se pudo servir playlist HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-playlist' }));
+    return res.status(500).send('No se pudo servir la playlist HLS');
+  }
+});
+
+router.get('/series/hls/:idCapitulo/:sessionId/:segmentName', async (req, res) => {
+  const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
+  const playbackToken = getSeriesPlaybackToken(req);
+  const sessionId = getRequestedMovieHlsSessionId(req);
+  const segmentName = req.params?.segmentName;
+
+  if (!idCapitulo || !sessionId || !/^segment_\d+\.ts$/.test(segmentName || '')) {
+    return res.status(404).send('Segmento no encontrado');
+  }
+
+  try {
+    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    if (result.error) return res.status(result.status || 404).send(result.message || 'Capítulo no disponible');
+
+    const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
+    touchMovieHlsJob(context);
+    return serveHlsFile(req, res, path.join(context.dir, segmentName), 'video/mp2t', 'no-store');
+  } catch (error) {
+    console.error('No se pudo servir segmento HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, segmentName, target: 'series-hls-segment' }));
+    return res.status(500).send('No se pudo servir el segmento HLS');
+  }
+});
+
+router.get('/getsubtitleSeries', async (req, res) => {
+  const idCapitulo = req.query?.idCapitulo || req.query?.idSeries || req.query?.id;
+  const playbackToken = getSeriesPlaybackToken(req);
+  if (!idCapitulo) return res.status(400).send('Debe enviar el id del capítulo');
+
+  try {
+    const result = await getChapter(idCapitulo, playbackToken);
+    if (result.error) return sendSeriesResultError(res, result);
+    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+    return res.send(normalizeChapterSubtitle(result.chapter));
+  } catch (error) {
+    console.error('No se pudo obtener subtítulo de capítulo:', error?.message || error);
+    return res.status(500).send('');
+  }
+});
+
 router.get('/getsubtitle', async (req, res) => {
   try {
     const pelicula = await getMovie(req.query.idPeli || req.query.id);
@@ -596,92 +824,6 @@ router.get('/getsubtitle', async (req, res) => {
     console.error('No se pudo obtener subtitulo:', error?.message || error);
     return res.status(500).send('');
   }
-});
-
-router.post('/cursos/hls/:lessonId/prepare', async (req, res) => {
-  const lessonId = String(req.params?.lessonId || '').trim();
-  const sessionId = getRequestedMovieHlsSessionId(req) || createMovieHlsSessionId();
-  const sourceUrl = normalizeCourseSourceUrl(req.body?.sourceUrl || req.query?.sourceUrl);
-  const startAtSeconds = normalizeMovieHlsStartAt(req.body?.startAt ?? req.query?.startAt);
-
-  if (!lessonId || !sourceUrl) {
-    return sendJson(res, 400, { success: false, error: 'Debe enviar una fuente de curso válida' });
-  }
-
-  try {
-    await assertCourseSourceAvailable(sourceUrl);
-    const context = getCourseHlsContext(lessonId, sourceUrl, sessionId);
-    courseHlsContexts.set(getCourseHlsContextKey(lessonId, sessionId), context);
-    const metadata = await probeMovieHlsMetadata(context, sourceUrl);
-    const status = startMovieHlsConversion({
-      context,
-      durationSeconds: metadata.durationSeconds,
-      startAtSeconds,
-      videoUrl: sourceUrl,
-      movieTitle: `Lección ${lessonId}`,
-    });
-    return sendJson(res, 200, { success: true, ...status });
-  } catch (error) {
-    console.error('No se pudo preparar HLS de curso:', error?.message || error);
-    const sourceUnavailable = Number.isInteger(error?.statusCode);
-    return sendJson(res, sourceUnavailable ? 502 : 500, {
-      success: false,
-      error: sourceUnavailable
-        ? 'El archivo original del curso no está disponible en el servidor'
-        : 'No se pudo preparar la conversión del curso',
-    });
-  }
-});
-
-router.get('/cursos/hls/:lessonId/status', (req, res) => {
-  const lessonId = String(req.params?.lessonId || '').trim();
-  const sessionId = getRequestedMovieHlsSessionId(req);
-  const context = sessionId ? getStoredCourseHlsContext(lessonId, sessionId) : null;
-
-  if (!lessonId || !sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar la sesión del curso' });
-  if (!context) return sendJson(res, 404, { success: false, error: 'La sesión HLS del curso no existe' });
-
-  touchMovieHlsJob(context);
-  return sendJson(res, 200, { success: true, ...getMovieHlsStatus(context) });
-});
-
-router.post('/cursos/hls/:lessonId/:sessionId/cancel', (req, res) => {
-  const lessonId = String(req.params?.lessonId || '').trim();
-  const sessionId = getRequestedMovieHlsSessionId(req);
-  const context = sessionId ? getStoredCourseHlsContext(lessonId, sessionId) : null;
-
-  if (!lessonId || !sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar la sesión del curso' });
-  if (!context) return sendJson(res, 404, { success: false, error: 'La sesión HLS del curso no existe' });
-
-  const stopped = stopMovieHlsJob(context, 'client-cancel', true);
-  if (!stopped) cleanupMovieHlsSession(context);
-  courseHlsContexts.delete(getCourseHlsContextKey(lessonId, sessionId));
-  return sendJson(res, 200, { success: true, sessionId, stopped });
-});
-
-router.get('/cursos/hls/:lessonId/:sessionId/index.m3u8', (req, res) => {
-  const lessonId = String(req.params?.lessonId || '').trim();
-  const sessionId = getRequestedMovieHlsSessionId(req);
-  const context = sessionId ? getStoredCourseHlsContext(lessonId, sessionId) : null;
-
-  if (!lessonId || !sessionId || !context) return res.status(404).send('Playlist de curso no disponible');
-  touchMovieHlsJob(context);
-  const status = getMovieHlsStatus(context);
-  if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
-  return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
-});
-
-router.get('/cursos/hls/:lessonId/:sessionId/:segmentName', (req, res) => {
-  const lessonId = String(req.params?.lessonId || '').trim();
-  const sessionId = getRequestedMovieHlsSessionId(req);
-  const segmentName = req.params?.segmentName;
-  const context = sessionId ? getStoredCourseHlsContext(lessonId, sessionId) : null;
-
-  if (!lessonId || !sessionId || !context || !/^segment_\d+\.ts$/.test(segmentName || '')) {
-    return res.status(404).send('Segmento de curso no encontrado');
-  }
-  touchMovieHlsJob(context);
-  return serveHlsFile(req, res, path.join(context.dir, segmentName), 'video/mp2t', 'no-store');
 });
 
 module.exports = router;
