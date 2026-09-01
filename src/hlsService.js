@@ -8,10 +8,12 @@ const config = require('./config');
 const HLS_PLAYLIST_NAME = 'index.m3u8';
 const hlsJobsByNamespace = new Map([
   ['movie', new Map()],
+  ['course', new Map()],
   ['series', new Map()],
 ]);
 const hlsMetadataPromisesByNamespace = new Map([
   ['movie', new Map()],
+  ['course', new Map()],
   ['series', new Map()],
 ]);
 const activeDirectStreams = new Map();
@@ -103,6 +105,17 @@ function getSeriesHlsContext(idCapitulo, videoUrl, sessionId = 'default') {
     '/series/hls',
     config.seriesCacheDir,
     'series',
+  );
+}
+
+function getCourseHlsContext(lessonId, videoUrl, sessionId = 'default') {
+  return getMovieHlsContext(
+    lessonId,
+    videoUrl,
+    sessionId,
+    '/cursos/hls',
+    config.courseCacheDir,
+    'course',
   );
 }
 
@@ -592,6 +605,7 @@ function serveHlsFile(req, res, filePath, contentType, cacheControl) {
 
 module.exports = {
   createMovieHlsSessionId,
+  getCourseHlsContext,
   getMovieHlsContext,
   getSeriesHlsContext,
   getMovieHlsStatus,

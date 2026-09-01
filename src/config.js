@@ -13,6 +13,7 @@ const parseAllowedOrigins = (value = '') => String(value || '')
 const config = {
   allowedOrigins: parseAllowedOrigins(process.env.ALLOWED_ORIGINS),
   cacheDir: path.resolve(process.env.HLS_CACHE_DIR || path.join(process.cwd(), '.vidkar-cache', 'peliculas-hls')),
+  courseCacheDir: path.resolve(process.env.COURSE_HLS_CACHE_DIR || path.join(process.cwd(), '.vidkar-cache', 'cursos-hls')),
   seriesCacheDir: path.resolve(process.env.SERIES_HLS_CACHE_DIR || path.join(process.cwd(), '.vidkar-cache', 'series-hls')),
   ffmpegPath: process.env.FFMPEG_PATH || '',
   hlsIdleTimeoutMs: Number(process.env.HLS_IDLE_TIMEOUT_MS || 45000),

@@ -7,6 +7,7 @@ const config = require('./config');
 const {
   cleanupMovieHlsSession,
   createMovieHlsSessionId,
+  getCourseHlsContext,
   getMovieHlsContext,
   getSeriesHlsContext,
   getMovieHlsStatus,
@@ -43,6 +44,47 @@ const { renderAdminDashboardPage, renderAdminLoginPage } = require('./adminViews
 
 const router = express.Router();
 const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
+const courseHlsContexts = new Map();
+
+function getCourseHlsContextKey(lessonId, sessionId) {
+  return `${lessonId}:${sessionId}`;
+}
+
+function normalizeCourseSourceUrl(value) {
+  try {
+    const sourceUrl = new URL(String(value || ''));
+    const expectedOrigin = new URL(config.meteorHttpOrigin);
+    const isCourseMediaPath = /^\/cursos\/media\/stream\/[^/]+$/.test(sourceUrl.pathname);
+    if (
+      !['http:', 'https:'].includes(sourceUrl.protocol)
+      || sourceUrl.origin !== expectedOrigin.origin
+      || !isCourseMediaPath
+      || !sourceUrl.searchParams.get('token')
+    ) return null;
+    return sourceUrl.toString();
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function assertCourseSourceAvailable(sourceUrl) {
+  const response = await axios.get(sourceUrl, {
+    headers: { Range: 'bytes=0-0', 'User-Agent': 'VIDKAR-HLS-Source-Check/1.0' },
+    responseType: 'stream',
+    timeout: 10000,
+    validateStatus: () => true,
+  });
+  response.data?.destroy?.();
+  if (response.status !== 200 && response.status !== 206) {
+    const error = new Error(`El origen del curso respondió HTTP ${response.status}`);
+    error.statusCode = response.status;
+    throw error;
+  }
+}
+
+function getStoredCourseHlsContext(lessonId, sessionId) {
+  return courseHlsContexts.get(getCourseHlsContextKey(lessonId, sessionId)) || null;
+}
 
 function renderStreamingLandingPage() {
   const currentYear = new Date().getFullYear();
