@@ -62,8 +62,13 @@ curl http://localhost:3010/health
 
 ## PM2
 
+`pm2 start` sin argumentos no puede saber qué script debe ejecutar. Usa el archivo
+de configuración del proyecto (o el comando equivalente de npm):
+
 ```bash
 pm2 start ecosystem.config.js
+# equivalente:
+npm run start:pm2
 pm2 logs servidor-hls-vidkar
 ```
 
