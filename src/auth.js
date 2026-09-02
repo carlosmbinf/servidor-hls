@@ -84,10 +84,13 @@ async function fetchLoggedUser(userId) {
     },
   });
 
-  await userSub.ready();
-  const user = server.collection('users').filter((item) => item.id === userId).fetch()[0];
-  if (userSub.stop) userSub.stop();
-  return user || null;
+  try {
+    await userSub.ready();
+    return server.collection('users').filter((item) => item.id === userId).fetch()[0] || null;
+  } finally {
+    if (userSub.remove) userSub.remove();
+    else if (userSub.stop) userSub.stop();
+  }
 }
 
 async function authenticateAdmin(identifier, password) {
