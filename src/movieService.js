@@ -1,4 +1,5 @@
 const { callMeteor } = require('./meteorClient');
+const axios = require('axios');
 
 function isAllowedMovieStreamUrl(videoUrl = '') {
   try {
@@ -32,6 +33,27 @@ function normalizeSubtitleToVtt(subtitle = '') {
     .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')}`;
 }
 
+async function fetchSubtitleToVtt(subtitleUrl) {
+  if (!subtitleUrl) return '';
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(subtitleUrl);
+  } catch (_error) {
+    return '';
+  }
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) return '';
+
+  const response = await axios.get(parsedUrl.toString(), {
+    responseType: 'text',
+    timeout: 15000,
+    maxContentLength: 10 * 1024 * 1024,
+    maxBodyLength: 10 * 1024 * 1024,
+    maxRedirects: 5,
+    validateStatus: (status) => status >= 200 && status < 300,
+  });
+  return normalizeSubtitleToVtt(response.data);
+}
+
 async function getMovie(idPeli) {
   if (!idPeli) return null;
   return callMeteor('getPelicula', idPeli);
@@ -54,4 +76,5 @@ module.exports = {
   getVideoContentType,
   isAllowedMovieStreamUrl,
   normalizeSubtitleToVtt,
+  fetchSubtitleToVtt,
 };

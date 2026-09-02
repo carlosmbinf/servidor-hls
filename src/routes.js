@@ -843,7 +843,7 @@ router.get('/getsubtitleSeries', async (req, res) => {
     const result = await getChapter(idCapitulo);
     if (result.error) return sendSeriesResultError(res, result);
     res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
-    return res.send(normalizeChapterSubtitle(result.chapter));
+    return res.send(await normalizeChapterSubtitle(result.chapter));
   } catch (error) {
     console.error('No se pudo obtener subtítulo de capítulo:', error?.message || error);
     return res.status(500).send('');

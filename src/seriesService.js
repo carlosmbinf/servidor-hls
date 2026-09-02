@@ -2,6 +2,7 @@ const config = require('./config');
 const { callMeteor } = require('./meteorClient');
 const {
   getVideoContentType,
+  fetchSubtitleToVtt,
   isAllowedMovieStreamUrl,
   normalizeSubtitleToVtt,
 } = require('./movieService');
@@ -33,8 +34,17 @@ async function getChapterVideoForStreaming(idCapitulo) {
   return { chapter: result.chapter, videoUrl };
 }
 
-function normalizeChapterSubtitle(chapter) {
-  return normalizeSubtitleToVtt(chapter?.textSubtitle || '');
+async function normalizeChapterSubtitle(chapter) {
+  const storedSubtitle = normalizeSubtitleToVtt(chapter?.textSubtitle || '');
+  if (storedSubtitle) return storedSubtitle;
+  if (!chapter?.subtitulo) return '';
+
+  try {
+    return await fetchSubtitleToVtt(chapter.subtitulo);
+  } catch (error) {
+    console.error('No se pudo obtener subtítulo remoto de capítulo:', error?.message || error);
+    return '';
+  }
 }
 
 module.exports = {
