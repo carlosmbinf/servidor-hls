@@ -29,10 +29,8 @@ const { getMovie, getMovieVideoForStreaming, getVideoContentType, normalizeSubti
 const {
   getChapter,
   getChapterVideoForStreaming,
-  getSeriesPlaybackToken,
   getVideoContentType: getSeriesVideoContentType,
   normalizeChapterSubtitle,
-  verifySeriesPlaybackToken,
 } = require('./seriesService');
 const {
   authenticateAdmin,
@@ -319,10 +317,8 @@ function buildStreamErrorReport(error, context = {}) {
   };
 }
 
-function withSeriesPlaybackToken(url, playbackToken) {
-  if (!url || !playbackToken) return url;
-  const separator = String(url).includes('?') ? '&' : '?';
-  return `${url}${separator}playbackToken=${encodeURIComponent(playbackToken)}`;
+function withSeriesPlaybackToken(url) {
+  return url;
 }
 
 function sendSeriesResultError(res, result) {
@@ -345,24 +341,20 @@ function getSeriesSessionId(req, { allowMissing = false } = {}) {
   return normalizeMovieHlsSessionId(rawSessionId);
 }
 
-function authorizeSeriesHlsSession(idCapitulo, sessionId, playbackToken) {
-  const payload = verifySeriesPlaybackToken(playbackToken, idCapitulo);
-  if (!payload) {
-    return { error: 'not-authorized', message: 'La autorización de reproducción no es válida o expiró.', status: 401 };
-  }
-  if (!validateSeriesHlsSession({ idCapitulo, sessionId, userId: payload.userId, playbackToken })) {
+function authorizeSeriesHlsSession(idCapitulo, sessionId) {
+  if (!validateSeriesHlsSession({ idCapitulo, sessionId })) {
     return { error: 'session-not-authorized', message: 'La sesión de reproducción no es válida.', status: 403 };
   }
-  return { payload };
+  return { payload: null };
 }
 
-function serveSeriesHlsPlaylist(req, res, playlistPath, playbackToken, cacheControl) {
+function serveSeriesHlsPlaylist(req, res, playlistPath, cacheControl) {
   if (!fs.existsSync(playlistPath)) return res.status(404).send('Playlist no disponible');
 
   try {
     const playlist = fs.readFileSync(playlistPath, 'utf8').replace(
       /^(segment_\d+\.ts)(\r?)$/gm,
-      (_match, segmentName, lineEnding) => `${segmentName}?playbackToken=${encodeURIComponent(playbackToken)}${lineEnding}`,
+      (_match, segmentName, lineEnding) => `${segmentName}${lineEnding}`,
     );
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
     res.setHeader('Cache-Control', 'private, no-store');
@@ -626,7 +618,6 @@ router.use('/series', (_req, res, next) => {
 
 router.get('/series/stream/:idCapitulo', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
-  const playbackToken = getSeriesPlaybackToken(req);
   let upstreamStream = null;
   let directStreamId = null;
   let streamClosed = false;
@@ -634,7 +625,7 @@ router.get('/series/stream/:idCapitulo', async (req, res) => {
   if (!idCapitulo) return res.status(400).send('Debe enviar el id del capítulo');
 
   try {
-    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    const result = await getChapterVideoForStreaming(idCapitulo);
     if (result.error) return sendSeriesResultError(res, result);
 
     const requestHeaders = req.headers.range ? { Range: req.headers.range } : {};
@@ -705,7 +696,6 @@ router.get('/series/stream/:idCapitulo', async (req, res) => {
 
 router.post('/series/hls/:idCapitulo/prepare', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
-  const playbackToken = getSeriesPlaybackToken(req);
   const sessionId = getSeriesSessionId(req, { allowMissing: true });
   let startAtSeconds = normalizeMovieHlsStartAt(req.query?.startAt || req.body?.startAt);
 
@@ -713,11 +703,9 @@ router.post('/series/hls/:idCapitulo/prepare', async (req, res) => {
   if (!sessionId) return sendJson(res, 400, { success: false, error: 'La sesión de reproducción no es válida' });
 
   try {
-    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    const result = await getChapterVideoForStreaming(idCapitulo);
     if (result.error) return sendSeriesResultError(res, result);
-    const payload = verifySeriesPlaybackToken(playbackToken, idCapitulo);
-    if (!payload) return sendSeriesResultError(res, { error: 'not-authorized', message: 'La autorización de reproducción no es válida o expiró.', status: 401 });
-    if (!registerSeriesHlsSession({ idCapitulo, sessionId, userId: payload.userId, playbackToken, expiresAt: Number(payload.exp) * 1000 })) {
+    if (!registerSeriesHlsSession({ idCapitulo, sessionId })) {
       return sendSeriesResultError(res, { error: 'session-not-authorized', message: 'La sesión de reproducción no es válida.', status: 403 });
     }
 
@@ -738,7 +726,7 @@ router.post('/series/hls/:idCapitulo/prepare', async (req, res) => {
     return sendJson(res, 200, {
       success: true,
       ...status,
-      playlistUrl: withSeriesPlaybackToken(status.playlistUrl, playbackToken),
+      playlistUrl: withSeriesPlaybackToken(status.playlistUrl),
     });
   } catch (error) {
     console.error('No se pudo preparar HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, target: 'series-hls-prepare' }));
@@ -748,16 +736,15 @@ router.post('/series/hls/:idCapitulo/prepare', async (req, res) => {
 
 router.get('/series/hls/:idCapitulo/status', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
-  const playbackToken = getSeriesPlaybackToken(req);
   const sessionId = getSeriesSessionId(req);
 
   if (!idCapitulo) return sendJson(res, 400, { success: false, error: 'Debe enviar el id del capítulo' });
   if (!sessionId) return sendJson(res, 400, { success: false, error: 'La sesión de reproducción no es válida' });
 
   try {
-    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    const result = await getChapterVideoForStreaming(idCapitulo);
     if (result.error) return sendSeriesResultError(res, result);
-    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId, playbackToken);
+    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId);
     if (authorization.error) return sendSeriesResultError(res, authorization);
 
     const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
@@ -767,7 +754,7 @@ router.get('/series/hls/:idCapitulo/status', async (req, res) => {
     return sendJson(res, 200, {
       success: true,
       ...status,
-      playlistUrl: withSeriesPlaybackToken(status.playlistUrl, playbackToken),
+      playlistUrl: withSeriesPlaybackToken(status.playlistUrl),
     });
   } catch (error) {
     console.error('No se pudo consultar HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-status' }));
@@ -777,15 +764,14 @@ router.get('/series/hls/:idCapitulo/status', async (req, res) => {
 
 router.post('/series/hls/:idCapitulo/:sessionId/cancel', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
-  const playbackToken = getSeriesPlaybackToken(req);
   const sessionId = getSeriesSessionId(req);
 
   if (!idCapitulo || !sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar capítulo y una sesión válida de reproducción' });
 
   try {
-    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    const result = await getChapterVideoForStreaming(idCapitulo);
     if (result.error) return sendSeriesResultError(res, result);
-    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId, playbackToken);
+    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId);
     if (authorization.error) return sendSeriesResultError(res, authorization);
 
     const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
@@ -801,15 +787,14 @@ router.post('/series/hls/:idCapitulo/:sessionId/cancel', async (req, res) => {
 
 router.get('/series/hls/:idCapitulo/:sessionId/index.m3u8', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
-  const playbackToken = getSeriesPlaybackToken(req);
   const sessionId = getSeriesSessionId(req);
 
   if (!idCapitulo || !sessionId) return res.status(400).send('Debe enviar capítulo y una sesión válida de reproducción');
 
   try {
-    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    const result = await getChapterVideoForStreaming(idCapitulo);
     if (result.error) return res.status(result.status || 404).send(result.message || 'Capítulo no disponible');
-    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId, playbackToken);
+    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId);
     if (authorization.error) return res.status(authorization.status).send(authorization.message);
 
     const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
@@ -817,7 +802,7 @@ router.get('/series/hls/:idCapitulo/:sessionId/index.m3u8', async (req, res) => 
     const status = getMovieHlsStatus(context);
     if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
 
-    return serveSeriesHlsPlaylist(req, res, context.playlistPath, playbackToken, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
+    return serveSeriesHlsPlaylist(req, res, context.playlistPath, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
     console.error('No se pudo servir playlist HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-playlist' }));
     return res.status(500).send('No se pudo servir la playlist HLS');
@@ -826,7 +811,6 @@ router.get('/series/hls/:idCapitulo/:sessionId/index.m3u8', async (req, res) => 
 
 router.get('/series/hls/:idCapitulo/:sessionId/:segmentName', async (req, res) => {
   const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
-  const playbackToken = getSeriesPlaybackToken(req);
   const sessionId = getSeriesSessionId(req);
   const segmentName = req.params?.segmentName;
 
@@ -835,9 +819,9 @@ router.get('/series/hls/:idCapitulo/:sessionId/:segmentName', async (req, res) =
   }
 
   try {
-    const result = await getChapterVideoForStreaming(idCapitulo, playbackToken);
+    const result = await getChapterVideoForStreaming(idCapitulo);
     if (result.error) return res.status(result.status || 404).send(result.message || 'Capítulo no disponible');
-    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId, playbackToken);
+    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId);
     if (authorization.error) return res.status(authorization.status).send(authorization.message);
 
     const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
@@ -853,11 +837,10 @@ router.get('/getsubtitleSeries', async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   res.setHeader('Pragma', 'no-cache');
   const idCapitulo = req.query?.idCapitulo || req.query?.idSeries || req.query?.id;
-  const playbackToken = getSeriesPlaybackToken(req);
   if (!idCapitulo) return res.status(400).send('Debe enviar el id del capítulo');
 
   try {
-    const result = await getChapter(idCapitulo, playbackToken);
+    const result = await getChapter(idCapitulo);
     if (result.error) return sendSeriesResultError(res, result);
     res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
     return res.send(normalizeChapterSubtitle(result.chapter));

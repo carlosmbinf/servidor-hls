@@ -27,9 +27,7 @@ module.exports = {
         HLS_IDLE_TIMEOUT_MS: process.env.HLS_IDLE_TIMEOUT_MS,
         HLS_KILL_GRACE_MS: process.env.HLS_KILL_GRACE_MS,
         FFMPEG_PATH: process.env.FFMPEG_PATH,
-        HLS_PLAYBACK_SECRET: process.env.HLS_PLAYBACK_SECRET,
         ADMIN_SESSION_MAX_AGE_MS: process.env.ADMIN_SESSION_MAX_AGE_MS,
-        ADMIN_SESSION_SECRET: process.env.ADMIN_SESSION_SECRET,
       }
     }
   ]

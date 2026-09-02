@@ -41,9 +41,7 @@ SERIES_HLS_CACHE_DIR=./.vidkar-cache/series-hls
 HLS_IDLE_TIMEOUT_MS=45000
 HLS_KILL_GRACE_MS=5000
 FFMPEG_PATH=/usr/bin/ffmpeg # opcional; si no, usa ffmpeg-static
-HLS_PLAYBACK_SECRET=change-this-secret
 ADMIN_SESSION_MAX_AGE_MS=28800000
-ADMIN_SESSION_SECRET=change-this-secret
 ```
 
 ## Arranque local

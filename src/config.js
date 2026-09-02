@@ -6,14 +6,6 @@ const getDefaultMeteorHttpOrigin = () => String(process.env.METEOR_DDP_ENDPOINT 
   .replace(/\/websocket\/?$/i, '');
 
 const isProduction = process.env.NODE_ENV === 'production';
-const getSecret = (name, fallback) => {
-  const value = process.env[name] || '';
-  if (isProduction && !value) {
-    throw new Error(`${name} no está configurado en producción`);
-  }
-  return value || fallback;
-};
-
 const meteorDdpEndpoint = process.env.METEOR_DDP_ENDPOINT || 'ws://localhost:3000/websocket';
 if (isProduction && !/^wss:\/\//i.test(meteorDdpEndpoint)) {
   throw new Error('METEOR_DDP_ENDPOINT debe usar wss:// en producción');
@@ -28,9 +20,7 @@ const config = {
   meteorDdpEndpoint,
   meteorHttpOrigin: process.env.METEOR_HTTP_ORIGIN || getDefaultMeteorHttpOrigin(),
   port: Number(process.env.PORT || 3050),
-  playbackSecret: getSecret('HLS_PLAYBACK_SECRET', 'vidkar-hls-dev-playback-secret'),
   sessionMaxAgeMs: Number(process.env.ADMIN_SESSION_MAX_AGE_MS || 1000 * 60 * 60 * 8),
-  sessionSecret: getSecret('ADMIN_SESSION_SECRET', 'vidkar-hls-dev-session-secret'),
 };
 
 module.exports = config;

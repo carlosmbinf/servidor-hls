@@ -24,26 +24,13 @@ function parseCookies(cookieHeader = '') {
     }, {});
 }
 
-function signToken(rawToken) {
-  return crypto.createHmac('sha256', config.sessionSecret).update(rawToken).digest('hex');
-}
-
 function createSessionToken() {
-  const rawToken = crypto.randomBytes(32).toString('hex');
-  return `${rawToken}.${signToken(rawToken)}`;
-}
-
-function isValidSessionToken(token = '') {
-  const [rawToken, signature] = String(token).split('.');
-  if (!rawToken || !signature) return false;
-  const expectedSignature = signToken(rawToken);
-  if (signature.length !== expectedSignature.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+  return crypto.randomBytes(32).toString('hex');
 }
 
 function getSessionFromRequest(req) {
   const token = parseCookies(req.headers.cookie)[ADMIN_COOKIE_NAME];
-  if (!token || !isValidSessionToken(token)) return null;
+  if (!token) return null;
 
   const session = sessions.get(token);
   if (!session) return null;

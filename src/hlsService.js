@@ -76,22 +76,16 @@ function getSeriesHlsSessionKey(idCapitulo, sessionId) {
   return `${String(idCapitulo)}:${String(sessionId)}`;
 }
 
-function hashPlaybackToken(playbackToken) {
-  return crypto.createHash('sha256').update(String(playbackToken || '')).digest('hex');
-}
-
-function registerSeriesHlsSession({ idCapitulo, sessionId, userId, playbackToken, expiresAt }) {
+function registerSeriesHlsSession({ idCapitulo, sessionId }) {
   const key = getSeriesHlsSessionKey(idCapitulo, sessionId);
   const current = seriesHlsSessions.get(key);
-  const normalizedExpiresAt = Number(expiresAt) || Date.now() + (15 * 60 * 1000);
+  const normalizedExpiresAt = Date.now() + (15 * 60 * 1000);
   if (normalizedExpiresAt <= Date.now()) return false;
-  if (current && (current.userId !== userId || current.tokenHash !== hashPlaybackToken(playbackToken))) return false;
+  if (current) return true;
 
   const session = current || {
     idCapitulo,
     sessionId,
-    userId,
-    tokenHash: hashPlaybackToken(playbackToken),
     expiresAt: normalizedExpiresAt,
     timer: null,
   };
@@ -105,7 +99,7 @@ function registerSeriesHlsSession({ idCapitulo, sessionId, userId, playbackToken
   return true;
 }
 
-function validateSeriesHlsSession({ idCapitulo, sessionId, userId, playbackToken }) {
+function validateSeriesHlsSession({ idCapitulo, sessionId }) {
   const key = getSeriesHlsSessionKey(idCapitulo, sessionId);
   const session = seriesHlsSessions.get(key);
   if (!session || session.expiresAt <= Date.now()) {
@@ -115,7 +109,7 @@ function validateSeriesHlsSession({ idCapitulo, sessionId, userId, playbackToken
     }
     return false;
   }
-  return session.userId === userId && session.tokenHash === hashPlaybackToken(playbackToken);
+  return true;
 }
 
 function unregisterSeriesHlsSession(idCapitulo, sessionId) {
