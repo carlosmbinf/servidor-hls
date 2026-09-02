@@ -1,4 +1,3 @@
-const cors = require('cors');
 const express = require('express');
 const config = require('./config');
 const { connectMeteor } = require('./meteorClient');
@@ -14,16 +13,6 @@ app.use((_req, res, next) => {
 });
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
-
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || config.allowedOrigins.length === 0 || config.allowedOrigins.includes(origin)) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error('Origen no permitido por servidor HLS'));
-  },
-}));
 
 app.use(routes);
 

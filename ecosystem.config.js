@@ -22,7 +22,6 @@ module.exports = {
         PORT: process.env.PORT,
         METEOR_DDP_ENDPOINT: process.env.METEOR_DDP_ENDPOINT,
         METEOR_HTTP_ORIGIN: process.env.METEOR_HTTP_ORIGIN,
-        ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
         HLS_CACHE_DIR: process.env.HLS_CACHE_DIR,
         SERIES_HLS_CACHE_DIR: process.env.SERIES_HLS_CACHE_DIR,
         HLS_IDLE_TIMEOUT_MS: process.env.HLS_IDLE_TIMEOUT_MS,
