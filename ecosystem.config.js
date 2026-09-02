@@ -1,17 +1,22 @@
 const path = require('path');
 const dotenv = require('dotenv');
 
-dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config({ path: path.join(__dirname, '.env'), override: true });
+
+const isEnabled = (value, defaultValue = false) => value === undefined
+  ? defaultValue
+  : value === 'true';
 
 module.exports = {
   apps: [
     {
       name: process.env.PM2_APP_NAME || 'servidor-hls-vidkar',
-      script: process.env.PM2_SCRIPT || 'src/index.js',
+      cwd: __dirname,
+      script: process.env.PM2_SCRIPT || path.join(__dirname, 'src/index.js'),
       instances: process.env.PM2_INSTANCES || 1,
-      autorestart: process.env.PM2_AUTORESTART === 'true',
-      watch: process.env.PM2_WATCH === 'true',
-      max_memory_restart: process.env.PM2_MAX_MEMORY_RESTART,
+      autorestart: isEnabled(process.env.PM2_AUTORESTART, true),
+      watch: isEnabled(process.env.PM2_WATCH),
+      max_memory_restart: process.env.PM2_MAX_MEMORY_RESTART || '1200M',
       env: {
         NODE_ENV: process.env.NODE_ENV,
         PORT: process.env.PORT,
