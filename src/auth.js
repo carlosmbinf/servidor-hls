@@ -160,6 +160,14 @@ function requireAdminPage(req, res, next) {
 }
 
 function requireAdminApi(req, res, next) {
+  const configuredRuntimeToken = String(config.runtimeToken || '');
+  const receivedRuntimeToken = String(req.headers['x-hls-runtime-token'] || '');
+  if (configuredRuntimeToken && receivedRuntimeToken === configuredRuntimeToken) {
+    req.adminSession = { user: { role: 'internal-runtime' } };
+    next();
+    return;
+  }
+
   const session = getSessionFromRequest(req);
   if (!session) {
     res.status(401).json({ success: false, error: 'Sesion requerida' });

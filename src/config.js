@@ -19,6 +19,7 @@ const config = {
   hlsKillGraceMs: Number(process.env.HLS_KILL_GRACE_MS || 5000),
   meteorDdpEndpoint,
   meteorHttpOrigin: process.env.METEOR_HTTP_ORIGIN || getDefaultMeteorHttpOrigin(),
+  runtimeToken: process.env.HLS_RUNTIME_TOKEN || '',
   port: Number(process.env.PORT || 3050),
   sessionMaxAgeMs: Number(process.env.ADMIN_SESSION_MAX_AGE_MS || 1000 * 60 * 60 * 8),
 };
