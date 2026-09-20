@@ -19,7 +19,7 @@ function connectMeteor() {
       cleanup();
       connectPromise = null;
       reject(new Error(`No se pudo conectar a Meteor DDP: ${config.meteorDdpEndpoint}`));
-    }, config.meteorConnectTimeoutMs);
+    }, 15000);
 
     const cleanup = () => {
       clearTimeout(timeout);

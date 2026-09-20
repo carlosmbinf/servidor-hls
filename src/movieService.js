@@ -1,5 +1,4 @@
 const { callMeteor } = require('./meteorClient');
-const config = require('./config');
 const axios = require('axios');
 
 function isAllowedMovieStreamUrl(videoUrl = '') {
@@ -46,7 +45,7 @@ async function fetchSubtitleToVtt(subtitleUrl) {
 
   const response = await axios.get(parsedUrl.toString(), {
     responseType: 'text',
-    timeout: config.upstreamTimeoutMs,
+    timeout: 15000,
     maxContentLength: 10 * 1024 * 1024,
     maxBodyLength: 10 * 1024 * 1024,
     maxRedirects: 5,
