@@ -512,6 +512,7 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
     '-avoid_negative_ts', 'make_zero',
     '-f', 'hls',
     '-hls_time', '6',
+    '-hls_playlist_type', 'event',
     '-hls_list_size', '12',
     '-hls_delete_threshold', '2',
     '-hls_flags', 'delete_segments+independent_segments+temp_file',
