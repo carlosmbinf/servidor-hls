@@ -370,7 +370,8 @@ function buildNativeSubtitleMasterPlaylist() {
     '#EXTM3U',
     '#EXT-X-VERSION:3',
     '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Español",LANGUAGE="es",AUTOSELECT=YES,DEFAULT=YES,URI="subtitles.vtt"',
-    '#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES="subs"',
+    '#EXT-X-INDEPENDENT-SEGMENTS',
+    '#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS="avc1.4d401f,mp4a.40.2",SUBTITLES="subs"',
     'video.m3u8',
     '',
   ].join('\n');
@@ -465,7 +466,7 @@ router.get('/peliculas/stream/:idPeli', async (req, res) => {
       method: 'GET',
       responseType: 'stream',
       headers: requestHeaders,
-      timeout: 15000,
+      timeout: config.upstreamTimeoutMs,
       maxRedirects: 5,
       validateStatus: isSuccessfulStreamStatus,
     });
@@ -711,7 +712,7 @@ router.get('/series/stream/:idCapitulo', async (req, res) => {
       method: 'GET',
       responseType: 'stream',
       headers: requestHeaders,
-      timeout: 15000,
+      timeout: config.upstreamTimeoutMs,
       maxRedirects: 5,
       validateStatus: isSuccessfulStreamStatus,
     });

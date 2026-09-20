@@ -206,7 +206,7 @@ async function probeMovieHlsMetadata(context, videoUrl) {
       } catch (_error) {
         // Best effort.
       }
-    }, 15000);
+    }, config.probeTimeoutMs);
 
     probe.stderr.on('data', (chunk) => {
       const chunkText = chunk.toString();
@@ -512,9 +512,9 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
     '-avoid_negative_ts', 'make_zero',
     '-f', 'hls',
     '-hls_time', '6',
-    '-hls_list_size', '12',
-    '-hls_delete_threshold', '2',
-    '-hls_flags', 'delete_segments+independent_segments+temp_file',
+    '-hls_playlist_type', 'vod',
+    '-hls_list_size', '0',
+    '-hls_flags', 'independent_segments+temp_file',
     '-hls_segment_filename', 'segment_%05d.ts',
     context.playlistPath,
   ];
