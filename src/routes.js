@@ -605,12 +605,30 @@ router.get('/peliculas/hls/:idPeli/:sessionId/index.m3u8', async (req, res) => {
     const status = getMovieHlsStatus(context);
     if (!status.playlistReady) return res.status(425).send('La conversion HLS aun no tiene segmentos disponibles');
 
-    const pelicula = await getMovie(idPeli);
-    if (pelicula?.textSubtitle) return sendNativeSubtitleMaster(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
-
     return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
     console.error('No se pudo servir playlist HLS:', buildStreamErrorReport(error, { idPeli, sessionId, target: 'hls-playlist' }));
+    return res.status(500).send('No se pudo servir la playlist HLS');
+  }
+});
+
+router.get('/peliculas/hls/:idPeli/:sessionId/native.m3u8', async (req, res) => {
+  const idPeli = req.params?.idPeli || req.query?.idPeli || req.query?.id;
+  const sessionId = getRequestedMovieHlsSessionId(req);
+  if (!idPeli || !sessionId) return res.status(400).send('Debe enviar pelicula y sesion de reproduccion');
+
+  try {
+    const { videoUrl, error } = await getMovieVideoForStreaming(idPeli);
+    if (error) return res.status(404).send(error);
+    const context = getMovieHlsContext(idPeli, videoUrl, sessionId);
+    touchMovieHlsJob(context);
+    const status = getMovieHlsStatus(context);
+    if (!status.playlistReady) return res.status(425).send('La conversion HLS aun no tiene segmentos disponibles');
+    const pelicula = await getMovie(idPeli);
+    if (!pelicula?.textSubtitle) return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', 'no-store');
+    return sendNativeSubtitleMaster(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
+  } catch (error) {
+    console.error('No se pudo servir playlist nativa HLS de pelicula:', buildStreamErrorReport(error, { idPeli, sessionId, target: 'hls-native-playlist' }));
     return res.status(500).send('No se pudo servir la playlist HLS');
   }
 });
@@ -866,12 +884,32 @@ router.get('/series/hls/:idCapitulo/:sessionId/index.m3u8', async (req, res) => 
     const status = getMovieHlsStatus(context);
     if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
 
-    const subtitleVtt = await normalizeChapterSubtitle(result.chapter);
-    if (subtitleVtt) return sendNativeSubtitleMaster(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
-
     return serveSeriesHlsPlaylist(req, res, context.playlistPath, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
     console.error('No se pudo servir playlist HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-playlist' }));
+    return res.status(500).send('No se pudo servir la playlist HLS');
+  }
+});
+
+router.get('/series/hls/:idCapitulo/:sessionId/native.m3u8', async (req, res) => {
+  const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
+  const sessionId = getSeriesSessionId(req);
+  if (!idCapitulo || !sessionId) return res.status(400).send('Debe enviar capítulo y una sesión válida de reproducción');
+
+  try {
+    const result = await getChapterVideoForStreaming(idCapitulo);
+    if (result.error) return res.status(result.status || 404).send(result.message || 'Capítulo no disponible');
+    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId);
+    if (authorization.error) return res.status(authorization.status).send(authorization.message);
+    const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
+    touchMovieHlsJob(context);
+    const status = getMovieHlsStatus(context);
+    if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
+    const subtitleVtt = await normalizeChapterSubtitle(result.chapter);
+    if (!subtitleVtt) return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', 'no-store');
+    return sendNativeSubtitleMaster(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
+  } catch (error) {
+    console.error('No se pudo servir playlist nativa HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-native-playlist' }));
     return res.status(500).send('No se pudo servir la playlist HLS');
   }
 });
