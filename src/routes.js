@@ -609,7 +609,7 @@ router.get('/peliculas/hls/:idPeli/:sessionId/index.m3u8', async (req, res) => {
     const pelicula = await getMovie(idPeli);
     const subtitleVtt = normalizeSubtitleToVtt(pelicula?.textSubtitle || '');
     const remoteSubtitleVtt = subtitleVtt || (pelicula?.subtitulo ? await fetchSubtitleToVtt(pelicula.subtitulo) : '');
-    if (remoteSubtitleVtt) return serveNativeSubtitleMasterPlaylist(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
+    if (remoteSubtitleVtt && req.query?.nativeSubtitles === '1') return serveNativeSubtitleMasterPlaylist(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
 
     return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
@@ -873,7 +873,7 @@ router.get('/series/hls/:idCapitulo/:sessionId/index.m3u8', async (req, res) => 
     if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
 
     const subtitleVtt = await normalizeChapterSubtitle(result.chapter);
-    if (subtitleVtt) return serveNativeSubtitleMasterPlaylist(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
+    if (subtitleVtt && req.query?.nativeSubtitles === '1') return serveNativeSubtitleMasterPlaylist(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
 
     return serveSeriesHlsPlaylist(req, res, context.playlistPath, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
