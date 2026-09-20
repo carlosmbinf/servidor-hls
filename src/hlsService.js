@@ -496,6 +496,7 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
     '-map', '0:a:0?',
     '-sn',
     '-dn',
+    //'-re',
     '-map_metadata', '-1',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
