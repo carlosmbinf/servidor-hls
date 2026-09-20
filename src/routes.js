@@ -25,7 +25,7 @@ const {
   validateSeriesHlsSession,
   unregisterDirectStream,
 } = require('./hlsService');
-const { getMovie, getMovieVideoForStreaming, getVideoContentType, normalizeSubtitleToVtt } = require('./movieService');
+const { getMovie, getMovieVideoForStreaming, getVideoContentType, normalizeSubtitleToVtt, fetchSubtitleToVtt } = require('./movieService');
 const {
   getChapter,
   getChapterVideoForStreaming,
@@ -607,8 +607,9 @@ router.get('/peliculas/hls/:idPeli/:sessionId/index.m3u8', async (req, res) => {
     if (!status.playlistReady) return res.status(425).send('La conversion HLS aun no tiene segmentos disponibles');
 
     const pelicula = await getMovie(idPeli);
-    const subtitleVtt = pelicula ? normalizeSubtitleToVtt(pelicula.textSubtitle) : '';
-    if (subtitleVtt) return serveNativeSubtitleMasterPlaylist(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
+    const subtitleVtt = normalizeSubtitleToVtt(pelicula?.textSubtitle || '');
+    const remoteSubtitleVtt = subtitleVtt || (pelicula?.subtitulo ? await fetchSubtitleToVtt(pelicula.subtitulo) : '');
+    if (remoteSubtitleVtt) return serveNativeSubtitleMasterPlaylist(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
 
     return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
@@ -649,7 +650,8 @@ router.get('/peliculas/hls/:idPeli/:sessionId/subtitles.vtt', async (req, res) =
     const context = getMovieHlsContext(idPeli, videoUrl, sessionId);
     touchMovieHlsJob(context);
     const pelicula = await getMovie(idPeli);
-    return serveSubtitleVtt(res, pelicula ? normalizeSubtitleToVtt(pelicula.textSubtitle) : '');
+    const subtitleVtt = normalizeSubtitleToVtt(pelicula?.textSubtitle || '');
+    return serveSubtitleVtt(res, subtitleVtt || (pelicula?.subtitulo ? await fetchSubtitleToVtt(pelicula.subtitulo) : ''));
   } catch (error) {
     console.error('No se pudo servir subtitulo HLS de pelicula:', buildStreamErrorReport(error, { idPeli, sessionId, target: 'hls-subtitle' }));
     return res.status(500).send('No se pudo servir el subtitulo');
