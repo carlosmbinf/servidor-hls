@@ -12,7 +12,7 @@ Servidor Node independiente para sacar la conversion HLS del backend Meteor prin
 - `GET /peliculas/hls/:idPeli/:sessionId/segment_00000.ts`
 - `GET /getsubtitle?idPeli=...`
 
-Cuando la película tiene subtítulos, `index.m3u8` publica una master playlist HLS con
+Cuando la película o el capítulo tiene subtítulos, `index.m3u8` publica una master playlist HLS con
 `EXT-X-MEDIA:TYPE=SUBTITLES`, compatible con AVPlayer/`expo-video`. VLC continúa
 reproduciendo la misma sesión HLS y conserva su soporte de subtítulos externo.
 
