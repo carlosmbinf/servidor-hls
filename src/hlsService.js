@@ -511,6 +511,7 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
     '-avoid_negative_ts', 'make_zero',
     '-f', 'hls',
     '-hls_time', '6',
+    '-hls_playlist_type', 'event',
     '-hls_list_size', '0',
     '-hls_flags', 'independent_segments+temp_file',
     '-hls_segment_filename', 'segment_%05d.ts',
