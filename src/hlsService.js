@@ -490,7 +490,7 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
     '-reconnect_streamed', '1',
     '-reconnect_delay_max', '5',
     '-user_agent', 'VIDKAR-HLS-Transcoder/1.0',
-    '-re',
+    // '-re',
     ...(startAtSeconds > 0 ? ['-ss', String(startAtSeconds)] : []),
     '-i', videoUrl,
     '-map', '0:v:0?',
