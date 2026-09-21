@@ -365,7 +365,8 @@ function serveSeriesHlsPlaylist(req, res, playlistPath, cacheControl) {
       (_match, segmentName, lineEnding) => `${segmentName}${lineEnding}`,
     );
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
-    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
     return res.send(playlist);
   } catch (error) {
     console.error('No se pudo leer playlist HLS de serie:', error?.message || error);

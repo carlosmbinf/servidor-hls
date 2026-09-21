@@ -710,11 +710,13 @@ function serveHlsFile(req, res, filePath, contentType, cacheControl) {
         url: req.originalUrl || req.url,
       });
     } else {
-      console.log('[HLS_DEBUG] segment-request', { file: path.basename(filePath), url: req.originalUrl || req.url });
+      const fileStats = fs.statSync(filePath);
+      console.log('[HLS_DEBUG] segment-request', { bytes: fileStats.size, file: path.basename(filePath), url: req.originalUrl || req.url });
     }
   }
 
   const fileStream = fs.createReadStream(filePath);
+  const fileStats = fs.statSync(filePath);
   const closeStream = () => {
     if (fileStream.destroy) fileStream.destroy();
   };
@@ -722,12 +724,15 @@ function serveHlsFile(req, res, filePath, contentType, cacheControl) {
   req.on('aborted', closeStream);
   res.on('close', closeStream);
   res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Length', String(fileStats.size));
   res.setHeader('Cache-Control', cacheControl);
+  res.setHeader('Pragma', 'no-cache');
   fileStream.on('error', () => {
     if (config.debugHls) console.log('[HLS_DEBUG] file-stream-error', { file: path.basename(filePath), url: req.originalUrl || req.url });
     if (!res.headersSent) res.status(500);
     res.end();
   });
+  if (config.debugHls) fileStream.on('end', () => console.log('[HLS_DEBUG] file-complete', { file: path.basename(filePath), url: req.originalUrl || req.url }));
   return fileStream.pipe(res);
 }
 
