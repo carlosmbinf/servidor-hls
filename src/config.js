@@ -24,6 +24,7 @@ const config = {
   meteorDdpEndpoint,
   meteorHttpOrigin: process.env.METEOR_HTTP_ORIGIN || getDefaultMeteorHttpOrigin(),
   runtimeToken: process.env.HLS_RUNTIME_TOKEN || '',
+  debugHls: process.env.HLS_DEBUG === 'true',
   port: Number(process.env.PORT || 3050),
   sessionMaxAgeMs: Number(process.env.ADMIN_SESSION_MAX_AGE_MS || 1000 * 60 * 60 * 8),
 };

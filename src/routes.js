@@ -683,7 +683,9 @@ router.get('/peliculas/hls/:idPeli/status', async (req, res) => {
     const context = getMovieHlsContext(idPeli, videoUrl, sessionId);
     await probeMovieHlsMetadata(context, videoUrl);
     touchMovieHlsJob(context);
-    return sendJson(res, 200, { success: true, ...getMovieHlsStatus(context) });
+    const status = getMovieHlsStatus(context);
+    if (config.debugHls) console.log('[HLS_DEBUG] movie-status', { idPeli, sessionId, status: status.status, playlistReady: status.playlistReady, segmentsCount: status.segmentsCount, durationSeconds: status.durationSeconds });
+    return sendJson(res, 200, { success: true, ...status });
   } catch (error) {
     console.error('No se pudo consultar HLS:', buildStreamErrorReport(error, { idPeli, target: 'hls-status' }));
     return sendJson(res, 500, { success: false, error: 'No se pudo consultar el estado de conversion' });

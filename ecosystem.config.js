@@ -27,6 +27,7 @@ module.exports = {
         COURSES_HLS_CACHE_DIR: process.env.COURSES_HLS_CACHE_DIR,
         HLS_IDLE_TIMEOUT_MS: process.env.HLS_IDLE_TIMEOUT_MS,
         HLS_KILL_GRACE_MS: process.env.HLS_KILL_GRACE_MS,
+        HLS_DEBUG: process.env.HLS_DEBUG,
         FFMPEG_PATH: process.env.FFMPEG_PATH,
         ADMIN_SESSION_MAX_AGE_MS: process.env.ADMIN_SESSION_MAX_AGE_MS,
       }

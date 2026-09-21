@@ -642,11 +642,13 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
     if (code === 0 && playlistReady) {
       ensureHlsPlaylistEndList(context);
       fs.writeFileSync(context.readyPath, JSON.stringify({ completedAt: new Date().toISOString(), durationSeconds, startAtSeconds }, null, 2));
+      if (config.debugHls) console.log('[HLS_DEBUG] conversion-complete', { cacheKey: context.cacheKey, code, durationSeconds, playlist: context.playlistPath, startAtSeconds });
       console.log(`HLS listo: ${movieTitle || context.cacheKey}`);
       return;
     }
 
     const message = job.stderr || `FFmpeg finalizo con codigo ${code}`;
+    if (config.debugHls) console.log('[HLS_DEBUG] conversion-failed', { cacheKey: context.cacheKey, code, message: message.slice(-1000) });
     fs.writeFileSync(context.errorPath, JSON.stringify({ message, failedAt: new Date().toISOString() }, null, 2));
     console.error('Error de conversion HLS:', message);
   });
@@ -689,7 +691,28 @@ function getHlsRuntimeSnapshot() {
 }
 
 function serveHlsFile(req, res, filePath, contentType, cacheControl) {
-  if (!fs.existsSync(filePath)) return res.status(404).send('Segmento no disponible');
+  const isPlaylist = contentType?.includes('mpegurl');
+  if (!fs.existsSync(filePath)) {
+    if (config.debugHls) console.log('[HLS_DEBUG] file-missing', { contentType, file: path.basename(filePath), url: req.originalUrl || req.url });
+    return res.status(404).send('Segmento no disponible');
+  }
+
+  if (config.debugHls) {
+    if (isPlaylist) {
+      const playlist = fs.readFileSync(filePath, 'utf8');
+      console.log('[HLS_DEBUG] playlist-request', {
+        bytes: Buffer.byteLength(playlist),
+        endList: /#EXT-X-ENDLIST/.test(playlist),
+        file: path.basename(filePath),
+        mediaSequence: playlist.match(/#EXT-X-MEDIA-SEQUENCE:(\d+)/)?.[1] || null,
+        segments: (playlist.match(/^segment_\d+\.ts$/gm) || []).length,
+        type: playlist.match(/#EXT-X-PLAYLIST-TYPE:(\w+)/)?.[1] || null,
+        url: req.originalUrl || req.url,
+      });
+    } else {
+      console.log('[HLS_DEBUG] segment-request', { file: path.basename(filePath), url: req.originalUrl || req.url });
+    }
+  }
 
   const fileStream = fs.createReadStream(filePath);
   const closeStream = () => {
@@ -701,6 +724,7 @@ function serveHlsFile(req, res, filePath, contentType, cacheControl) {
   res.setHeader('Content-Type', contentType);
   res.setHeader('Cache-Control', cacheControl);
   fileStream.on('error', () => {
+    if (config.debugHls) console.log('[HLS_DEBUG] file-stream-error', { file: path.basename(filePath), url: req.originalUrl || req.url });
     if (!res.headersSent) res.status(500);
     res.end();
   });
