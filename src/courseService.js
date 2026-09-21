@@ -1,17 +1,24 @@
 const config = require('./config');
 
-function isAllowedCourseStreamUrl(videoUrl = '') {
+function normalizeCourseStreamUrl(videoUrl = '') {
   try {
-    const parsedUrl = new URL(String(videoUrl));
+    const rawUrl = String(videoUrl || '').trim();
     const configuredOrigin = new URL(config.meteorHttpOrigin);
+    const parsedUrl = new URL(rawUrl, configuredOrigin.origin);
     const normalizeHostname = (hostname) => String(hostname || '').toLowerCase().replace(/^www\./, '');
-    return ['http:', 'https:'].includes(parsedUrl.protocol)
-      && normalizeHostname(parsedUrl.hostname) === normalizeHostname(configuredOrigin.hostname)
-      && parsedUrl.port === configuredOrigin.port
-      && parsedUrl.pathname.startsWith('/cfs/files/');
+    const isLocalHost = ['localhost', '127.0.0.1'].includes(String(parsedUrl.hostname || '').toLowerCase());
+    const isMeteorHost = normalizeHostname(parsedUrl.hostname) === normalizeHostname(configuredOrigin.hostname)
+      && parsedUrl.port === configuredOrigin.port;
+    if (!['http:', 'https:'].includes(parsedUrl.protocol) || (!isMeteorHost && !isLocalHost)) return null;
+    if (!parsedUrl.pathname || parsedUrl.pathname === '/') return null;
+    return `${configuredOrigin.origin}${parsedUrl.pathname}${parsedUrl.search}`;
   } catch (_error) {
-    return false;
+    return null;
   }
+}
+
+function isAllowedCourseStreamUrl(videoUrl = '') {
+  return Boolean(normalizeCourseStreamUrl(videoUrl));
 }
 
 function getCourseVideoContentType(videoUrl = '') {
@@ -23,14 +30,16 @@ function getCourseVideoContentType(videoUrl = '') {
 }
 
 function getCourseVideoForStreaming(videoUrl) {
-  if (!isAllowedCourseStreamUrl(videoUrl)) {
+  const normalizedUrl = normalizeCourseStreamUrl(videoUrl);
+  if (!normalizedUrl) {
     return { error: 'invalid-video', message: 'La URL de la lección no es válida.', status: 403 };
   }
-  return { videoUrl: String(videoUrl).trim() };
+  return { videoUrl: normalizedUrl };
 }
 
 module.exports = {
   getCourseVideoContentType,
   getCourseVideoForStreaming,
   isAllowedCourseStreamUrl,
+  normalizeCourseStreamUrl,
 };
