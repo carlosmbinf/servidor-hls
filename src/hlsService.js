@@ -9,13 +9,16 @@ const HLS_PLAYLIST_NAME = 'index.m3u8';
 const hlsJobsByNamespace = new Map([
   ['movie', new Map()],
   ['series', new Map()],
+  ['course', new Map()],
 ]);
 const hlsMetadataPromisesByNamespace = new Map([
   ['movie', new Map()],
   ['series', new Map()],
+  ['course', new Map()],
 ]);
 const activeDirectStreams = new Map();
 const seriesHlsSessions = new Map();
+const courseHlsSessions = new Map();
 
 function getHlsNamespace(context) {
   return context?.namespace || 'movie';
@@ -153,6 +156,52 @@ function getSeriesHlsContext(idCapitulo, videoUrl, sessionId = 'default') {
     config.seriesCacheDir,
     'series',
   );
+}
+
+function getCourseHlsContext(lessonId, videoUrl, sessionId = 'default') {
+  return getMovieHlsContext(
+    lessonId,
+    videoUrl,
+    sessionId,
+    '/cursos/hls',
+    config.coursesCacheDir,
+    'course',
+  );
+}
+
+function getCourseHlsSessionKey(lessonId, sessionId) {
+  return `${String(lessonId)}:${String(sessionId)}`;
+}
+
+function registerCourseHlsSession({ lessonId, sessionId, videoUrl }) {
+  const key = getCourseHlsSessionKey(lessonId, sessionId);
+  const session = courseHlsSessions.get(key);
+  if (session) {
+    session.expiresAt = Date.now() + (15 * 60 * 1000);
+    return true;
+  }
+  courseHlsSessions.set(key, {
+    expiresAt: Date.now() + (15 * 60 * 1000),
+    lessonId,
+    sessionId,
+    videoUrl,
+  });
+  return true;
+}
+
+function getCourseHlsSession(lessonId, sessionId) {
+  const key = getCourseHlsSessionKey(lessonId, sessionId);
+  const session = courseHlsSessions.get(key);
+  if (!session || session.expiresAt <= Date.now()) {
+    if (session) courseHlsSessions.delete(key);
+    return null;
+  }
+  session.expiresAt = Date.now() + (15 * 60 * 1000);
+  return session;
+}
+
+function unregisterCourseHlsSession(lessonId, sessionId) {
+  courseHlsSessions.delete(getCourseHlsSessionKey(lessonId, sessionId));
 }
 
 function readJsonFile(filePath) {
@@ -642,6 +691,7 @@ function serveHlsFile(req, res, filePath, contentType, cacheControl) {
 module.exports = {
   createMovieHlsSessionId,
   getMovieHlsContext,
+  getCourseHlsContext,
   getSeriesHlsContext,
   getMovieHlsStatus,
   getRequestedMovieHlsSessionId,
@@ -658,6 +708,9 @@ module.exports = {
   unregisterDirectStream,
   normalizeMovieHlsSessionId,
   registerSeriesHlsSession,
+  registerCourseHlsSession,
   validateSeriesHlsSession,
   unregisterSeriesHlsSession,
+  unregisterCourseHlsSession,
+  getCourseHlsSession,
 };

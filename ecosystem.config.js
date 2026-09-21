@@ -24,6 +24,7 @@ module.exports = {
         METEOR_HTTP_ORIGIN: process.env.METEOR_HTTP_ORIGIN,
         HLS_CACHE_DIR: process.env.HLS_CACHE_DIR,
         SERIES_HLS_CACHE_DIR: process.env.SERIES_HLS_CACHE_DIR,
+        COURSES_HLS_CACHE_DIR: process.env.COURSES_HLS_CACHE_DIR,
         HLS_IDLE_TIMEOUT_MS: process.env.HLS_IDLE_TIMEOUT_MS,
         HLS_KILL_GRACE_MS: process.env.HLS_KILL_GRACE_MS,
         FFMPEG_PATH: process.env.FFMPEG_PATH,

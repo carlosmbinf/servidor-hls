@@ -5,6 +5,8 @@ const path = require('path');
 const config = require('./config');
 const {
   cleanupMovieHlsSession,
+  getCourseHlsContext,
+  getCourseHlsSession,
   createMovieHlsSessionId,
   getMovieHlsContext,
   getSeriesHlsContext,
@@ -21,7 +23,9 @@ const {
   stopMovieHlsJob,
   touchMovieHlsJob,
   registerSeriesHlsSession,
+  registerCourseHlsSession,
   unregisterSeriesHlsSession,
+  unregisterCourseHlsSession,
   validateSeriesHlsSession,
   unregisterDirectStream,
 } = require('./hlsService');
@@ -32,6 +36,9 @@ const {
   getVideoContentType: getSeriesVideoContentType,
   normalizeChapterSubtitle,
 } = require('./seriesService');
+const {
+  getCourseVideoForStreaming,
+} = require('./courseService');
 const {
   authenticateAdmin,
   clearSessionCookie,
@@ -515,6 +522,116 @@ router.get('/peliculas/stream/:idPeli', async (req, res) => {
     return res.status(upstreamStatus || 500).send(upstreamStatus === 503
       ? 'El servidor de video no esta disponible en este momento'
       : 'Error al preparar la reproduccion');
+  }
+});
+
+router.post('/cursos/hls/:lessonId/prepare', async (req, res) => {
+  const lessonId = req.params?.lessonId || req.query?.lessonId || req.query?.id;
+  const sessionId = getSeriesSessionId(req, { allowMissing: true });
+  const videoUrl = req.body?.videoUrl || req.query?.videoUrl;
+  let startAtSeconds = normalizeMovieHlsStartAt(req.query?.startAt || req.body?.startAt);
+
+  if (!lessonId) return sendJson(res, 400, { success: false, error: 'Debe enviar el id de la lección' });
+  if (!sessionId) return sendJson(res, 400, { success: false, error: 'La sesión de reproducción no es válida' });
+
+  try {
+    const result = getCourseVideoForStreaming(videoUrl);
+    if (result.error) return sendJson(res, result.status, { success: false, error: result.message, code: result.error });
+    registerCourseHlsSession({ lessonId, sessionId, videoUrl: result.videoUrl });
+    const context = getCourseHlsContext(lessonId, result.videoUrl, sessionId);
+    const metadata = await probeMovieHlsMetadata(context, result.videoUrl);
+    if (metadata.durationSeconds && startAtSeconds >= metadata.durationSeconds) {
+      startAtSeconds = Math.max(0, Math.floor(metadata.durationSeconds) - 5);
+    }
+    const status = startMovieHlsConversion({
+      context,
+      durationSeconds: metadata.durationSeconds,
+      videoUrl: result.videoUrl,
+      movieTitle: lessonId,
+      startAtSeconds,
+    });
+    return sendJson(res, 200, { success: true, ...status });
+  } catch (error) {
+    console.error('No se pudo preparar HLS de lección:', buildStreamErrorReport(error, { lessonId, target: 'course-hls-prepare' }));
+    return sendJson(res, 500, { success: false, error: 'No se pudo preparar la conversión de la lección' });
+  }
+});
+
+router.get('/cursos/hls/:lessonId/status', async (req, res) => {
+  const lessonId = req.params?.lessonId || req.query?.lessonId || req.query?.id;
+  const sessionId = getSeriesSessionId(req);
+  const session = lessonId && sessionId ? getCourseHlsSession(lessonId, sessionId) : null;
+
+  if (!lessonId || !sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar lección y sesión de reproducción' });
+  if (!session) return sendJson(res, 403, { success: false, error: 'La sesión de reproducción no es válida' });
+
+  try {
+    const context = getCourseHlsContext(lessonId, session.videoUrl, sessionId);
+    await probeMovieHlsMetadata(context, session.videoUrl);
+    touchMovieHlsJob(context);
+    return sendJson(res, 200, { success: true, ...getMovieHlsStatus(context) });
+  } catch (error) {
+    console.error('No se pudo consultar HLS de lección:', buildStreamErrorReport(error, { lessonId, sessionId, target: 'course-hls-status' }));
+    return sendJson(res, 500, { success: false, error: 'No se pudo consultar el estado de conversión' });
+  }
+});
+
+router.post('/cursos/hls/:lessonId/:sessionId/cancel', async (req, res) => {
+  const lessonId = req.params?.lessonId || req.query?.lessonId || req.query?.id;
+  const sessionId = getSeriesSessionId(req);
+  const session = lessonId && sessionId ? getCourseHlsSession(lessonId, sessionId) : null;
+
+  if (!lessonId || !sessionId) return sendJson(res, 400, { success: false, error: 'Debe enviar lección y sesión de reproducción' });
+  if (!session) return sendJson(res, 403, { success: false, error: 'La sesión de reproducción no es válida' });
+
+  try {
+    const context = getCourseHlsContext(lessonId, session.videoUrl, sessionId);
+    const stopped = stopMovieHlsJob(context, 'client-cancel', true);
+    if (!stopped) cleanupMovieHlsSession(context);
+    unregisterCourseHlsSession(lessonId, sessionId);
+    return sendJson(res, 200, { success: true, stopped, sessionId });
+  } catch (error) {
+    console.error('No se pudo cancelar HLS de lección:', buildStreamErrorReport(error, { lessonId, sessionId, target: 'course-hls-cancel' }));
+    return sendJson(res, 500, { success: false, error: 'No se pudo cancelar la conversión de la lección' });
+  }
+});
+
+router.get('/cursos/hls/:lessonId/:sessionId/index.m3u8', async (req, res) => {
+  const lessonId = req.params?.lessonId || req.query?.lessonId || req.query?.id;
+  const sessionId = getSeriesSessionId(req);
+  const session = lessonId && sessionId ? getCourseHlsSession(lessonId, sessionId) : null;
+
+  if (!lessonId || !sessionId) return res.status(400).send('Debe enviar lección y sesión de reproducción');
+  if (!session) return res.status(403).send('La sesión de reproducción no es válida');
+
+  try {
+    const context = getCourseHlsContext(lessonId, session.videoUrl, sessionId);
+    touchMovieHlsJob(context);
+    const status = getMovieHlsStatus(context);
+    if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
+    return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
+  } catch (error) {
+    console.error('No se pudo servir playlist HLS de lección:', buildStreamErrorReport(error, { lessonId, sessionId, target: 'course-hls-playlist' }));
+    return res.status(500).send('No se pudo servir la playlist HLS');
+  }
+});
+
+router.get('/cursos/hls/:lessonId/:sessionId/:segmentName', async (req, res) => {
+  const lessonId = req.params?.lessonId || req.query?.lessonId || req.query?.id;
+  const sessionId = getSeriesSessionId(req);
+  const segmentName = req.params?.segmentName;
+  const session = lessonId && sessionId ? getCourseHlsSession(lessonId, sessionId) : null;
+
+  if (!lessonId || !sessionId || !session || !/^segment_\d+\.ts$/.test(segmentName || '')) {
+    return res.status(404).send('Segmento no encontrado');
+  }
+  try {
+    const context = getCourseHlsContext(lessonId, session.videoUrl, sessionId);
+    touchMovieHlsJob(context);
+    return serveHlsFile(req, res, path.join(context.dir, segmentName), 'video/mp2t', 'no-store');
+  } catch (error) {
+    console.error('No se pudo servir segmento HLS de lección:', buildStreamErrorReport(error, { lessonId, sessionId, segmentName, target: 'course-hls-segment' }));
+    return res.status(500).send('No se pudo servir el segmento HLS');
   }
 });
 

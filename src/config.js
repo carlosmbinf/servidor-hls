@@ -14,6 +14,7 @@ if (isProduction && !/^wss:\/\//i.test(meteorDdpEndpoint)) {
 const config = {
   cacheDir: path.resolve(process.env.HLS_CACHE_DIR || path.join(process.cwd(), '.vidkar-cache', 'peliculas-hls')),
   seriesCacheDir: path.resolve(process.env.SERIES_HLS_CACHE_DIR || path.join(process.cwd(), '.vidkar-cache', 'series-hls')),
+  coursesCacheDir: path.resolve(process.env.COURSES_HLS_CACHE_DIR || path.join(process.cwd(), '.vidkar-cache', 'cursos-hls')),
   ffmpegPath: process.env.FFMPEG_PATH || '',
   hlsIdleTimeoutMs: Number(process.env.HLS_IDLE_TIMEOUT_MS || 60000),
   hlsKillGraceMs: Number(process.env.HLS_KILL_GRACE_MS || 10000),
