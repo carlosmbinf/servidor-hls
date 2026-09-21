@@ -715,6 +715,21 @@ function serveHlsFile(req, res, filePath, contentType, cacheControl) {
     }
   }
 
+  if (isPlaylist) {
+    try {
+      const playlist = fs.readFileSync(filePath);
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Length', String(playlist.length));
+      res.setHeader('Cache-Control', cacheControl || 'private, no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Connection', 'close');
+      return res.end(playlist);
+    } catch (error) {
+      if (config.debugHls) console.log('[HLS_DEBUG] playlist-read-error', { file: path.basename(filePath), message: error?.message || error, url: req.originalUrl || req.url });
+      return res.status(500).send('No se pudo servir la playlist HLS');
+    }
+  }
+
   const fileStream = fs.createReadStream(filePath);
   const fileStats = fs.statSync(filePath);
   const closeStream = () => {
