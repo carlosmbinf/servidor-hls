@@ -380,7 +380,7 @@ function buildNativeSubtitleMasterPlaylist() {
     '#EXT-X-VERSION:3',
     '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Español",LANGUAGE="es",AUTOSELECT=YES,DEFAULT=YES,URI="subtitles.vtt"',
     '#EXT-X-INDEPENDENT-SEGMENTS',
-    '#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS="avc1.4d401f,mp4a.40.2",SUBTITLES="subs"',
+    '#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES="subs"',
     'video.m3u8',
     '',
   ].join('\n');
