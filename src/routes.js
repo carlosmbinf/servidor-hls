@@ -7,6 +7,7 @@ const {
   cleanupMovieHlsSession,
   getCourseHlsContext,
   getCourseHlsSession,
+  ensureHlsPlaylistEndList,
   createMovieHlsSessionId,
   getMovieHlsContext,
   getSeriesHlsContext,
@@ -609,6 +610,7 @@ router.get('/cursos/hls/:lessonId/:sessionId/index.m3u8', async (req, res) => {
     touchMovieHlsJob(context);
     const status = getMovieHlsStatus(context);
     if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
+    if (status.status === 'ready') ensureHlsPlaylistEndList(context);
     return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
     console.error('No se pudo servir playlist HLS de lección:', buildStreamErrorReport(error, { lessonId, sessionId, target: 'course-hls-playlist' }));
@@ -722,6 +724,7 @@ router.get('/peliculas/hls/:idPeli/:sessionId/index.m3u8', async (req, res) => {
     touchMovieHlsJob(context);
     const status = getMovieHlsStatus(context);
     if (!status.playlistReady) return res.status(425).send('La conversion HLS aun no tiene segmentos disponibles');
+    if (status.status === 'ready') ensureHlsPlaylistEndList(context);
 
     const pelicula = await getMovie(idPeli);
     const subtitleVtt = normalizeSubtitleToVtt(pelicula?.textSubtitle || '');
@@ -748,6 +751,7 @@ router.get('/peliculas/hls/:idPeli/:sessionId/video.m3u8', async (req, res) => {
     touchMovieHlsJob(context);
     const status = getMovieHlsStatus(context);
     if (!status.playlistReady) return res.status(425).send('La conversion HLS aun no tiene segmentos disponibles');
+    if (status.status === 'ready') ensureHlsPlaylistEndList(context);
     return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
     console.error('No se pudo servir variante HLS de pelicula:', buildStreamErrorReport(error, { idPeli, sessionId, target: 'hls-video-playlist' }));
@@ -988,6 +992,7 @@ router.get('/series/hls/:idCapitulo/:sessionId/index.m3u8', async (req, res) => 
     touchMovieHlsJob(context);
     const status = getMovieHlsStatus(context);
     if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
+    if (status.status === 'ready') ensureHlsPlaylistEndList(context);
 
     const subtitleVtt = await normalizeChapterSubtitle(result.chapter);
     if (subtitleVtt && req.query?.nativeSubtitles === '1') return serveNativeSubtitleMasterPlaylist(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
@@ -1014,6 +1019,7 @@ router.get('/series/hls/:idCapitulo/:sessionId/video.m3u8', async (req, res) => 
     touchMovieHlsJob(context);
     const status = getMovieHlsStatus(context);
     if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
+    if (status.status === 'ready') ensureHlsPlaylistEndList(context);
     return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
     console.error('No se pudo servir variante HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-video-playlist' }));

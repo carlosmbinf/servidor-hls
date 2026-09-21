@@ -391,6 +391,21 @@ function cleanupMovieHlsSession(context) {
   }
 }
 
+function ensureHlsPlaylistEndList(context) {
+  if (!context?.playlistPath || !fs.existsSync(context.playlistPath)) return false;
+
+  try {
+    const playlist = fs.readFileSync(context.playlistPath, 'utf8');
+    if (/#EXT-X-ENDLIST\s*$/m.test(playlist)) return false;
+    const normalizedPlaylist = playlist.replace(/\s*$/, '');
+    fs.writeFileSync(context.playlistPath, `${normalizedPlaylist}\n#EXT-X-ENDLIST\n`);
+    return true;
+  } catch (error) {
+    console.warn('No se pudo marcar el final de la playlist HLS:', error?.message || error);
+    return false;
+  }
+}
+
 function stopMovieHlsJob(context, reason = 'manual', cleanup = true) {
   const jobs = getHlsJobs(context);
   const job = jobs.get(context.cacheKey);
@@ -468,6 +483,7 @@ function getMovieHlsStatus(context) {
   }
 
   if (readyInfo && playlistReady) {
+    ensureHlsPlaylistEndList(context);
     return {
       status: 'ready',
       ready: true,
@@ -622,6 +638,7 @@ function startMovieHlsConversion({ context, videoUrl, movieTitle, startAtSeconds
 
     const playlistReady = fs.existsSync(context.playlistPath) && countHlsSegments(context.dir) > 0;
     if (code === 0 && playlistReady) {
+      ensureHlsPlaylistEndList(context);
       fs.writeFileSync(context.readyPath, JSON.stringify({ completedAt: new Date().toISOString(), durationSeconds, startAtSeconds }, null, 2));
       console.log(`HLS listo: ${movieTitle || context.cacheKey}`);
       return;
@@ -704,6 +721,7 @@ module.exports = {
   stopMovieHlsJob,
   touchMovieHlsJob,
   cleanupMovieHlsSession,
+  ensureHlsPlaylistEndList,
   getHlsRuntimeSnapshot,
   unregisterDirectStream,
   normalizeMovieHlsSessionId,
