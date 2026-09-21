@@ -4,8 +4,10 @@ function isAllowedCourseStreamUrl(videoUrl = '') {
   try {
     const parsedUrl = new URL(String(videoUrl));
     const configuredOrigin = new URL(config.meteorHttpOrigin);
+    const normalizeHostname = (hostname) => String(hostname || '').toLowerCase().replace(/^www\./, '');
     return ['http:', 'https:'].includes(parsedUrl.protocol)
-      && parsedUrl.origin === configuredOrigin.origin
+      && normalizeHostname(parsedUrl.hostname) === normalizeHostname(configuredOrigin.hostname)
+      && parsedUrl.port === configuredOrigin.port
       && parsedUrl.pathname.startsWith('/cfs/files/');
   } catch (_error) {
     return false;
