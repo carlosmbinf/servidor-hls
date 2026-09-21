@@ -396,8 +396,10 @@ function ensureHlsPlaylistEndList(context) {
 
   try {
     const playlist = fs.readFileSync(context.playlistPath, 'utf8');
-    if (/#EXT-X-ENDLIST\s*$/m.test(playlist)) return false;
-    const normalizedPlaylist = playlist.replace(/\s*$/, '');
+    const normalizedPlaylist = playlist
+      .replace(/^#EXT-X-PLAYLIST-TYPE:EVENT\s*$/m, '#EXT-X-PLAYLIST-TYPE:VOD')
+      .replace(/\s*$/, '');
+    if (normalizedPlaylist === playlist.replace(/\s*$/, '') && /#EXT-X-ENDLIST\s*$/m.test(playlist)) return false;
     fs.writeFileSync(context.playlistPath, `${normalizedPlaylist}\n#EXT-X-ENDLIST\n`);
     return true;
   } catch (error) {
