@@ -374,46 +374,6 @@ function serveSeriesHlsPlaylist(req, res, playlistPath, cacheControl) {
   }
 }
 
-function buildNativeSubtitleMasterPlaylist() {
-  return [
-    '#EXTM3U',
-    '#EXT-X-VERSION:3',
-    '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Español",LANGUAGE="es",AUTOSELECT=YES,DEFAULT=YES,URI="subtitles.m3u8"',
-    '#EXT-X-INDEPENDENT-SEGMENTS',
-    '#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES="subs"',
-    'video.m3u8',
-    '',
-  ].join('\n');
-}
-
-function buildNativeSubtitlePlaylist(durationSeconds, ready) {
-  const duration = Math.max(1, Math.ceil(Number(durationSeconds) || 3600));
-  return [
-    '#EXTM3U',
-    '#EXT-X-VERSION:3',
-    `#EXT-X-TARGETDURATION:${duration}`,
-    '#EXT-X-MEDIA-SEQUENCE:0',
-    ...(ready ? ['#EXT-X-PLAYLIST-TYPE:VOD'] : []),
-    `#EXTINF:${duration},`,
-    'subtitles.vtt',
-    ...(ready ? ['#EXT-X-ENDLIST'] : []),
-    '',
-  ].join('\n');
-}
-
-function serveNativeSubtitlePlaylist(res, subtitleVtt, durationSeconds, ready) {
-  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
-  res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.send(buildNativeSubtitlePlaylist(durationSeconds, ready));
-}
-
-function serveNativeSubtitleMasterPlaylist(res, cacheControl) {
-  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
-  res.setHeader('Cache-Control', cacheControl || 'private, no-store');
-  return res.send(buildNativeSubtitleMasterPlaylist());
-}
-
 function serveSubtitleVtt(res, subtitleVtt) {
   res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
   res.setHeader('Cache-Control', 'private, no-store');
@@ -751,10 +711,6 @@ router.get('/peliculas/hls/:idPeli/:sessionId/index.m3u8', async (req, res) => {
     if (!status.playlistReady) return res.status(425).send('La conversion HLS aun no tiene segmentos disponibles');
     if (status.status === 'ready') ensureHlsPlaylistEndList(context);
 
-    if (req.query?.nativeSubtitles === '1') {
-      return serveNativeSubtitleMasterPlaylist(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
-    }
-
     return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
     console.error('No se pudo servir playlist HLS:', buildStreamErrorReport(error, { idPeli, sessionId, target: 'hls-playlist' }));
@@ -762,26 +718,6 @@ router.get('/peliculas/hls/:idPeli/:sessionId/index.m3u8', async (req, res) => {
   }
 });
 
-router.get('/peliculas/hls/:idPeli/:sessionId/video.m3u8', async (req, res) => {
-  const idPeli = req.params?.idPeli || req.query?.idPeli || req.query?.id;
-  const sessionId = getRequestedMovieHlsSessionId(req);
-
-  if (!idPeli || !sessionId) return res.status(400).send('Debe enviar pelicula y sesion de reproduccion');
-
-  try {
-    const { videoUrl, error } = await getMovieVideoForStreaming(idPeli);
-    if (error) return res.status(404).send(error);
-    const context = getMovieHlsContext(idPeli, videoUrl, sessionId);
-    touchMovieHlsJob(context);
-    const status = getMovieHlsStatus(context);
-    if (!status.playlistReady) return res.status(425).send('La conversion HLS aun no tiene segmentos disponibles');
-    if (status.status === 'ready') ensureHlsPlaylistEndList(context);
-    return serveHlsFile(req, res, context.playlistPath, 'application/vnd.apple.mpegurl; charset=utf-8', status.status === 'ready' ? 'private, max-age=30' : 'no-store');
-  } catch (error) {
-    console.error('No se pudo servir variante HLS de pelicula:', buildStreamErrorReport(error, { idPeli, sessionId, target: 'hls-video-playlist' }));
-    return res.status(500).send('No se pudo servir la playlist HLS');
-  }
-});
 
 router.get('/peliculas/hls/:idPeli/:sessionId/subtitles.vtt', async (req, res) => {
   const idPeli = req.params?.idPeli || req.query?.idPeli || req.query?.id;
@@ -800,26 +736,6 @@ router.get('/peliculas/hls/:idPeli/:sessionId/subtitles.vtt', async (req, res) =
   } catch (error) {
     console.error('No se pudo servir subtitulo HLS de pelicula:', buildStreamErrorReport(error, { idPeli, sessionId, target: 'hls-subtitle' }));
     return res.status(500).send('No se pudo servir el subtitulo');
-  }
-});
-
-router.get('/peliculas/hls/:idPeli/:sessionId/subtitles.m3u8', async (req, res) => {
-  const idPeli = req.params?.idPeli || req.query?.idPeli || req.query?.id;
-  const sessionId = getRequestedMovieHlsSessionId(req);
-  if (!idPeli || !sessionId) return res.status(400).send('Debe enviar pelicula y sesion de reproduccion');
-
-  try {
-    const { videoUrl, error } = await getMovieVideoForStreaming(idPeli);
-    if (error) return res.status(404).send(error);
-    const context = getMovieHlsContext(idPeli, videoUrl, sessionId);
-    const status = getMovieHlsStatus(context);
-    const pelicula = await getMovie(idPeli);
-    const subtitleVtt = normalizeSubtitleToVtt(pelicula?.textSubtitle || '')
-      || (pelicula?.subtitulo ? await fetchSubtitleToVtt(pelicula.subtitulo) : '');
-    return serveNativeSubtitlePlaylist(res, subtitleVtt, status.durationSeconds, status.status === 'ready');
-  } catch (error) {
-    console.error('No se pudo servir playlist de subtitulo HLS:', buildStreamErrorReport(error, { idPeli, sessionId, target: 'hls-subtitle-playlist' }));
-    return res.status(500).send('No se pudo servir la playlist de subtitulo');
   }
 });
 
@@ -1038,10 +954,6 @@ router.get('/series/hls/:idCapitulo/:sessionId/index.m3u8', async (req, res) => 
     if (!status.playlistReady) return res.status(425).send('La conversión HLS aún no tiene segmentos disponibles');
     if (status.status === 'ready') ensureHlsPlaylistEndList(context);
 
-    if (req.query?.nativeSubtitles === '1') {
-      return serveNativeSubtitleMasterPlaylist(res, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
-    }
-
     return serveSeriesHlsPlaylist(req, res, context.playlistPath, status.status === 'ready' ? 'private, max-age=30' : 'no-store');
   } catch (error) {
     console.error('No se pudo servir playlist HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-playlist' }));
@@ -1089,26 +1001,6 @@ router.get('/series/hls/:idCapitulo/:sessionId/subtitles.vtt', async (req, res) 
   } catch (error) {
     console.error('No se pudo servir subtitulo HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-hls-subtitle' }));
     return res.status(500).send('No se pudo servir el subtitulo');
-  }
-});
-
-router.get('/series/hls/:idCapitulo/:sessionId/subtitles.m3u8', async (req, res) => {
-  const idCapitulo = req.params?.idCapitulo || req.query?.idCapitulo || req.query?.id;
-  const sessionId = getSeriesSessionId(req);
-  if (!idCapitulo || !sessionId) return res.status(400).send('Debe enviar capítulo y sesión de reproducción');
-
-  try {
-    const result = await getChapterVideoForStreaming(idCapitulo);
-    if (result.error) return sendSeriesResultError(res, result);
-    const authorization = authorizeSeriesHlsSession(idCapitulo, sessionId);
-    if (authorization.error) return sendSeriesResultError(res, authorization);
-    const context = getSeriesHlsContext(idCapitulo, result.videoUrl, sessionId);
-    const status = getMovieHlsStatus(context);
-    const subtitleVtt = await normalizeChapterSubtitle(result.chapter);
-    return serveNativeSubtitlePlaylist(res, subtitleVtt, status.durationSeconds, status.status === 'ready');
-  } catch (error) {
-    console.error('No se pudo servir playlist de subtitulo HLS de capítulo:', buildStreamErrorReport(error, { idCapitulo, sessionId, target: 'series-subtitle-playlist' }));
-    return res.status(500).send('No se pudo servir la playlist de subtitulo');
   }
 });
 

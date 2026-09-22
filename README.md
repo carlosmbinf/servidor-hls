@@ -8,13 +8,13 @@ Servidor Node independiente para sacar la conversion HLS del backend Meteor prin
 - `POST /peliculas/hls/:idPeli/:sessionId/cancel`
 - `GET /peliculas/hls/:idPeli/:sessionId/index.m3u8`
 - `GET /peliculas/hls/:idPeli/:sessionId/video.m3u8` (variante de video usada por la master playlist nativa)
-- `GET /peliculas/hls/:idPeli/:sessionId/subtitles.vtt` (pista WEBVTT HLS autorizada)
+- `GET /peliculas/hls/:idPeli/:sessionId/subtitles.vtt` (pista WEBVTT externa autorizada)
 - `GET /peliculas/hls/:idPeli/:sessionId/segment_00000.ts`
 - `GET /getsubtitle?idPeli=...`
 
-Cuando la película o el capítulo tiene subtítulos, `index.m3u8` publica una master playlist HLS con
-`EXT-X-MEDIA:TYPE=SUBTITLES`, compatible con AVPlayer/`expo-video`. VLC continúa
-reproduciendo la misma sesión HLS y conserva su soporte de subtítulos externo.
+Las playlists `index.m3u8` y `video.m3u8` contienen únicamente la reproducción de video.
+Los subtítulos se sirven por separado como WEBVTT mediante `subtitles.vtt`, para evitar
+que AVPlayer/VLC tenga que resolver una variante HLS adicional durante la reproducción.
 
 ## Como se conecta a VIDKAR
 
